@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, String, Numeric, Boolean, Date, DateTime, Integer, BigInteger, ForeignKey, Text
+from sqlalchemy import Column, String, Numeric, Boolean, Date, DateTime, Integer, BigInteger, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -29,20 +29,60 @@ class MasterRecipeItem(Base):
     recipe = relationship("MasterRecipe", back_populates="items")
 
 
-# 2. PRODUCTION PLANNING
+# 2. PRODUCTION PLANNING & BATCHES
 class ProductionPlan(Base):
     __tablename__ = "production_plans"
 
     plan_id = Column(String(50), primary_key=True)
     plan_date = Column(Date, nullable=False)
-    target_gilingan = Column(Integer, nullable=False)
-    target_mika_pax = Column(Integer, nullable=False)
-    target_vakum_pax = Column(Integer, nullable=False)
-    status = Column(String(20), default="PLANNED")
+    target_gilingan = Column(Integer, nullable=False, default=0)
+    target_mika_pax = Column(Integer, nullable=False, default=0)
+    target_vakum_pax = Column(Integer, nullable=False, default=0)
+    status = Column(String(20), default="DRAFT") # 'DRAFT', 'PUBLISHED', 'ACTIVE'
     created_by = Column(String(50), nullable=False)
+    version = Column(Integer, default=1, nullable=False)
+
+    # Kolom rincian input rencana PPIC
+    order_mika = Column(Integer, default=0)
+    order_vakum = Column(Integer, default=0)
+    bumper_mika = Column(Integer, default=0)
+    bumper_vakum = Column(Integer, default=0)
+    manual_gilingan = Column(Integer, nullable=True)
+    manual_bumbu = Column(Integer, nullable=True)
+    target_kulit_bal = Column(Integer, default=0)
+    target_kulit_9cm = Column(Integer, default=0)
+    target_kulit_7cm = Column(Integer, default=0)
+    target_saos_bal = Column(Integer, default=0)
+    target_saos_mika = Column(Integer, default=0)
+    target_saos_vakum = Column(Integer, default=0)
+    published_at = Column(DateTime, nullable=True)
+    published_by = Column(String(50), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     lots = relationship("LotTracking", back_populates="plan")
     discrepancies = relationship("DiscrepancyLog", back_populates="plan")
+    batches = relationship("ProductionBatch", back_populates="plan", cascade="all, delete-orphan", order_by="ProductionBatch.batch_no")
+
+
+class ProductionBatch(Base):
+    __tablename__ = "production_batches"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "batch_no", name="uq_plan_batch_no"),
+    )
+
+    batch_id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    plan_id = Column(String(50), ForeignKey("production_plans.plan_id"), nullable=False, index=True)
+    batch_no = Column(Integer, nullable=False, default=1)
+    plan_date = Column(Date, nullable=False, index=True)
+    status = Column(String(20), default="ACTIVE", nullable=False) # 'ACTIVE', 'VOID'
+    created_by = Column(String(50), nullable=False)
+    reason = Column(Text, nullable=True) # e.g. 'Pesanan mendadak', 'Stok kurang'
+    idempotency_key = Column(String(100), nullable=True, index=True)
+    counts_json = Column(Text, nullable=True) # JSON string counts: {"adonan": 10, "bumbu": 1, ...}
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    plan = relationship("ProductionPlan", back_populates="batches")
+    lots = relationship("LotTracking", back_populates="batch")
 
 
 # 3. QR LOT TRACKING & STATE MACHINE
@@ -51,8 +91,10 @@ class LotTracking(Base):
 
     lot_qr_code = Column(String(100), primary_key=True)
     plan_id = Column(String(50), ForeignKey("production_plans.plan_id"), nullable=True)
+    batch_no = Column(Integer, default=1, nullable=False)
+    batch_id = Column(BigInteger().with_variant(Integer, "sqlite"), ForeignKey("production_batches.batch_id"), nullable=True)
     lot_type = Column(String(20), nullable=False) # 'DAGING', 'BUMBU', 'KULIT', 'ADONAN', 'FG_MIKA', 'FG_VAKUM'
-    current_status = Column(String(50), nullable=False) # 'READY_IN_MEAT_STATION', 'IN_TRANSIT_TO_SEASONING', 'IN_SEASONING_STATION', 'READY_IN_SEASONING_STATION', 'IN_TRANSIT_TO_ASSEMBLY', 'READY_IN_WRAPPER_STATION', 'IN_ASSEMBLY_STATION', 'CONSUMED', 'CLOSED'
+    current_status = Column(String(50), nullable=False) # 'READY_IN_MEAT_STATION', 'IN_TRANSIT_TO_SEASONING', 'IN_SEASONING_STATION', 'READY_IN_SEASONING_STATION', 'IN_TRANSIT_TO_ASSEMBLY', 'READY_IN_WRAPPER_STATION', 'IN_ASSEMBLY_STATION', 'CONSUMED', 'CLOSED', 'VOID'
     current_station = Column(String(50), nullable=False)
     quantity = Column(Numeric(10, 2), nullable=False)
     unit = Column(String(20), nullable=False)
@@ -60,6 +102,7 @@ class LotTracking(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     plan = relationship("ProductionPlan", back_populates="lots")
+    batch = relationship("ProductionBatch", back_populates="lots")
     custody_logs = relationship("CustodyTransferLog", back_populates="lot")
 
 
@@ -122,4 +165,36 @@ class ScanEvent(Base):
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
 
     lot = relationship("LotTracking", backref="scan_events")
+
+
+# 8. SUPPLIER INBOUND (PENERIMAAN BARANG DARI SUPPLIER LUAR)
+class SupplierInbound(Base):
+    __tablename__ = "supplier_inbounds"
+
+    inbound_id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    inbound_date = Column(Date, nullable=False, default=datetime.utcnow)
+    category = Column(String(50), nullable=False)  # 'KULIT', 'DAGING', 'BUMBU', 'SAOS', 'KEMASAN', 'LAINNYA'
+    item_name = Column(String(100), nullable=False)
+    quantity = Column(Numeric(10, 2), nullable=False)
+    unit = Column(String(20), nullable=False)  # 'BAL', 'KG', 'KARUNG', 'DUS', 'PACK', 'PCS'
+    supplier_name = Column(String(100), nullable=False)
+    document_no = Column(String(100), nullable=True)  # No Surat Jalan / Nota
+    notes = Column(Text, nullable=True)
+    received_by = Column(String(50), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# 9. DIVISION DAILY NOTES & REJECT RECORD (CATATAN REKAP PPIC)
+class DivisionDailyNote(Base):
+    __tablename__ = "division_daily_notes"
+
+    note_id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    record_date = Column(Date, nullable=False, default=datetime.utcnow)
+    division = Column(String(50), nullable=False)  # 'DAGING', 'BUMBU', 'KULIT', 'SAOS', 'CETAK', 'PACKING'
+    reject_count = Column(Integer, default=0)
+    reject_notes = Column(Text, nullable=True)
+    operational_notes = Column(Text, nullable=True)
+    created_by = Column(String(50), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

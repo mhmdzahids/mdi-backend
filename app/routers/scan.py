@@ -9,6 +9,7 @@ from ..auth import get_current_user, is_global_supervisor
 from ..models import LotTracking, ScanSetting, ScanEvent
 from ..schemas import (
     ScanTransitionRequest,
+    ScanBatchTransitionRequest,
     ScanUndoRequest,
     UpdateScanModeRequest,
     ScanModeSettingResponse,
@@ -186,9 +187,37 @@ async def process_scan_endpoint(
         operator_station_id=payload.station_id,
         user_id=user_id,
         user_role=user_role,
+        intent=payload.intent,
         notes=payload.notes
     )
     return result
+
+
+@router.post("/scan/process-batch")
+async def process_batch_scan_endpoint(
+    payload: ScanBatchTransitionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Eksekusi batch scan in atau scan out untuk beberapa kode QR sekaligus dalam 1 transaksi DB.
+    """
+    user_id = current_user.get("operator_id") or current_user.get("username") or "OPERATOR"
+    user_role = current_user.get("role", "OPERATOR")
+
+    results = []
+    for code in payload.lot_codes:
+        res = await execute_scan_transition(
+            db=db,
+            lot_code=code,
+            operator_station_id=payload.station_id,
+            user_id=user_id,
+            user_role=user_role,
+            intent=payload.intent,
+            notes=payload.notes
+        )
+        results.append(res)
+    return results
 
 
 @router.post("/scan/undo")

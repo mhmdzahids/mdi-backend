@@ -1009,7 +1009,7 @@ async def complete_packing_to_fg(
                     lot_qr_code=code,
                     plan_id=payload.plan_id,
                     lot_type="FG_MIKA",
-                    current_status="PACKED_VERIFIED",
+                    current_status="READY_IN_ASSEMBLY_STATION",
                     current_station="PACKING_STATION",
                     quantity=50.0,
                     unit="MIKA"
@@ -1018,12 +1018,12 @@ async def complete_packing_to_fg(
 
                 log_mika = CustodyTransferLog(
                     lot_qr_code=code,
-                    action_type="FG_PACKED",
+                    action_type="FG_GENERATED",
                     station_id="PACKING_STATION",
                     target_station=None,
                     user_id=payload.operator_id,
                     user_role_active=payload.operator_role,
-                    notes=f"Dimsum Mika {code} isi 50 pcs dipacking (siap freezer/sales)"
+                    notes=f"Label Dimsum Mika {code} diterbitkan PIC, menunggu verifikasi packing"
                 )
                 db.add(log_mika)
                 created_fg_lots.append(fg_mika)
@@ -1037,7 +1037,7 @@ async def complete_packing_to_fg(
                     lot_qr_code=code,
                     plan_id=payload.plan_id,
                     lot_type="FG_VAKUM",
-                    current_status="PACKED_VERIFIED",
+                    current_status="READY_IN_ASSEMBLY_STATION",
                     current_station="PACKING_STATION",
                     quantity=25.0,
                     unit="PACK"
@@ -1046,12 +1046,12 @@ async def complete_packing_to_fg(
 
                 log_vakum = CustodyTransferLog(
                     lot_qr_code=code,
-                    action_type="FG_PACKED",
+                    action_type="FG_GENERATED",
                     station_id="PACKING_STATION",
                     target_station=None,
                     user_id=payload.operator_id,
                     user_role_active=payload.operator_role,
-                    notes=f"Dimsum Vakum {code} isi 25 pcs dipacking (siap freezer/sales)"
+                    notes=f"Label Dimsum Vakum {code} diterbitkan PIC, menunggu verifikasi packing"
                 )
                 db.add(log_vakum)
                 created_fg_lots.append(fg_vakum)

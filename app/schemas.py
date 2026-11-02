@@ -174,14 +174,48 @@ class CustodyLogResponse(BaseModel):
         from_attributes = True
 
 
-# --- Schema Production Plan ---
+# --- Schema Production Plan & Batches ---
+class ProductionBatchResponse(BaseModel):
+    batch_id: int
+    plan_id: str
+    batch_no: int
+    plan_date: date
+    status: str
+    created_by: str
+    reason: Optional[str] = None
+    counts: Optional[dict] = None
+    created_at: datetime
+    is_voidable: Optional[bool] = True
+
+    class Config:
+        from_attributes = True
+
 class CreateProductionPlanRequest(BaseModel):
     plan_id: str = Field(..., example="PLAN-20261005-01")
     plan_date: date = Field(..., example="2026-10-05")
-    target_gilingan: int = Field(..., gt=0, example=40)
+    target_gilingan: int = Field(..., ge=0, example=40)
     target_mika_pax: int = Field(default=0, ge=0, example=0)
     target_vakum_pax: int = Field(default=0, ge=0, example=0)
     created_by: str = Field(default="SYSTEM", example="SUPERVISOR-01")
+
+class UpdatePlanDraftRequest(BaseModel):
+    plan_id: Optional[str] = None
+    version: int = 1
+    order_mika: Optional[int] = 0
+    order_vakum: Optional[int] = 0
+    bumper_mika: Optional[int] = 0
+    bumper_vakum: Optional[int] = 0
+    manual_gilingan: Optional[int] = None
+    manual_bumbu: Optional[int] = None
+    target_gilingan: Optional[int] = None
+    target_bumbu: Optional[int] = None
+    target_kulit: Optional[int] = None
+    target_kulit_9cm: Optional[int] = None
+    target_kulit_7cm: Optional[int] = None
+    target_saos: Optional[int] = None
+    target_saos_mika: Optional[int] = None
+    target_saos_vakum: Optional[int] = None
+    operator_id: Optional[str] = "PPIC-AYU"
 
 class ProductionPlanResponse(BaseModel):
     plan_id: str
@@ -191,6 +225,23 @@ class ProductionPlanResponse(BaseModel):
     target_vakum_pax: int
     status: str
     created_by: str
+    version: int = 1
+    order_mika: int = 0
+    order_vakum: int = 0
+    bumper_mika: int = 0
+    bumper_vakum: int = 0
+    manual_gilingan: Optional[int] = None
+    manual_bumbu: Optional[int] = None
+    target_kulit_bal: int = 0
+    target_kulit_9cm: int = 0
+    target_kulit_7cm: int = 0
+    target_saos_bal: int = 0
+    target_saos_mika: int = 0
+    target_saos_vakum: int = 0
+    published_at: Optional[datetime] = None
+    published_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    batches: List[ProductionBatchResponse] = []
 
     class Config:
         from_attributes = True
@@ -352,6 +403,14 @@ class TokenResponse(BaseModel):
 class ScanTransitionRequest(BaseModel):
     lot_code: str = Field(..., example="DG-20261022-001")
     station_id: str = Field(..., example="MEAT_STATION")
+    intent: Optional[str] = Field(default=None, example="SCAN_IN")  # 'SCAN_IN' | 'SCAN_OUT'
+    notes: Optional[str] = Field(default=None)
+
+
+class ScanBatchTransitionRequest(BaseModel):
+    lot_codes: List[str] = Field(..., min_length=1, example=["AD-20261023-001", "AD-20261023-002"])
+    station_id: str = Field(..., example="MEAT_STATION")
+    intent: str = Field(..., example="SCAN_OUT")  # 'SCAN_IN' | 'SCAN_OUT'
     notes: Optional[str] = Field(default=None)
 
 
@@ -381,6 +440,107 @@ class VoidLotsRequest(BaseModel):
     reason: Optional[str] = Field(default="Sisa rencana harian tidak terealisasi")
     operator_id: Optional[str] = Field(default="PIC")
     operator_role: Optional[str] = Field(default="STAKEHOLDER")
+
+
+class SupplierInboundCreate(BaseModel):
+    category: str = Field(..., example="KULIT")  # KULIT, DAGING, BUMBU, SAOS, KEMASAN, LAINNYA
+    item_name: str = Field(..., example="Kulit Dimsum 9 cm (Mika)")
+    quantity: float = Field(..., gt=0, example=5.0)
+    unit: str = Field(default="BAL", example="BAL")
+    supplier_name: str = Field(..., example="Sumber Kulit Rejeki")
+    document_no: Optional[str] = Field(default=None, example="SJ-20261029-01")
+    notes: Optional[str] = Field(default=None, example="Kemasan utuh dan bersih")
+    received_by: Optional[str] = Field(default="PPIC-AYU")
+
+
+class SupplierInboundResponse(BaseModel):
+    inbound_id: int
+    inbound_date: date
+    category: str
+    item_name: str
+    quantity: float
+    unit: str
+    supplier_name: str
+    document_no: Optional[str] = None
+    notes: Optional[str] = None
+    received_by: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class DivisionDailyNoteCreate(BaseModel):
+    division: str = Field(..., example="DAGING")
+    reject_count: int = Field(default=0, ge=0)
+    reject_notes: Optional[str] = Field(default=None)
+    operational_notes: Optional[str] = Field(default=None)
+    created_by: Optional[str] = Field(default="PPIC-AYU")
+
+
+class DivisionDailyNoteResponse(BaseModel):
+    note_id: int
+    record_date: date
+    division: str
+    reject_count: int
+    reject_notes: Optional[str] = None
+    operational_notes: Optional[str] = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class GenerateDailyLotsAllRequest(BaseModel):
+    plan_id: Optional[str] = None
+    operator_id: Optional[str] = "PPIC-AYU"
+    operator_role: Optional[str] = "STAKEHOLDER"
+    idempotency_key: Optional[str] = None
+    version: Optional[int] = None
+    reason: Optional[str] = None
+    gilingan_count: Optional[int] = None
+    sack_count: Optional[int] = None
+    wrapper_bal: Optional[int] = None
+    sauce_bal: Optional[int] = None
+    wrapper_9cm_bal: Optional[int] = None
+    wrapper_7cm_bal: Optional[int] = None
+    sauce_mika_bal: Optional[int] = None
+    sauce_vakum_bal: Optional[int] = None
+
+
+class AddProductionBatchPreviewRequest(BaseModel):
+    plan_id: Optional[str] = None
+    add_mika_packs: Optional[int] = 0
+    add_vakum_packs: Optional[int] = 0
+    manual_add_gilingan: Optional[int] = None
+    manual_add_bumbu: Optional[int] = None
+    manual_add_kulit: Optional[int] = None
+    manual_add_saos: Optional[int] = None
+
+
+class AddProductionBatchPreviewResponse(BaseModel):
+    next_batch_no: int
+    delta: dict
+    cumulative_targets: dict
+    already_issued_active: dict
+    message: str
+
+
+class AddProductionBatchRequest(BaseModel):
+    plan_id: Optional[str] = None
+    operator_id: Optional[str] = "PPIC-AYU"
+    operator_role: Optional[str] = "STAKEHOLDER"
+    idempotency_key: Optional[str] = None
+    reason: Optional[str] = None
+    add_mika_packs: Optional[int] = 0
+    add_vakum_packs: Optional[int] = 0
+    confirmed_delta_gilingan: Optional[int] = None
+    confirmed_delta_bumbu: Optional[int] = None
+    confirmed_delta_kulit: Optional[int] = None
+    confirmed_delta_saos: Optional[int] = None
+
 
 
 
