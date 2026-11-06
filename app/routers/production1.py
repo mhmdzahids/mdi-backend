@@ -2791,9 +2791,9 @@ async def create_supplier_inbound(
         )
 
     try:
-        today = datetime.now(WIB).date()
+        inbound_date = payload.inbound_date or datetime.now(WIB).date()
         inbound = SupplierInbound(
-            inbound_date=today,
+            inbound_date=inbound_date,
             category=payload.category.upper(),
             item_name=payload.item_name,
             quantity=payload.quantity,
@@ -2847,8 +2847,10 @@ async def list_supplier_inbound(
         target_date = parse_date_param(end_date)
         query = select(SupplierInbound).where(SupplierInbound.inbound_date == target_date)
     else:
-        target_date = parse_date_param(None)
-        query = select(SupplierInbound).where(SupplierInbound.inbound_date == target_date)
+        # Default jika tanpa parameter: muat hari ini dan kemarin agar pergantian hari (00:00) tidak mengosongkan riwayat
+        today_wib = datetime.now(WIB).date()
+        yesterday_wib = today_wib - timedelta(days=1)
+        query = select(SupplierInbound).where(SupplierInbound.inbound_date.between(yesterday_wib, today_wib))
 
     if category:
         query = query.where(SupplierInbound.category == category.upper())

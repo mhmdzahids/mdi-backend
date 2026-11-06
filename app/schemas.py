@@ -458,6 +458,7 @@ class SupplierInboundCreate(BaseModel):
     document_no: Optional[str] = Field(default=None, example="SJ-20261029-01")
     notes: Optional[str] = Field(default=None, example="Kemasan utuh dan bersih")
     received_by: Optional[str] = Field(default="PPIC-AYU")
+    inbound_date: Optional[date] = None
 
 
 class SupplierInboundResponse(BaseModel):
