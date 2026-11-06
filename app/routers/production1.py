@@ -67,7 +67,8 @@ from ..schemas import (
     SupplierInboundResponse,
     DivisionDailyNoteCreate,
     DivisionDailyNoteResponse,
-    GenerateDailyLotsAllRequest
+    GenerateDailyLotsAllRequest,
+    GeneratePackagingBatchRequest
 )
 
 router = APIRouter(prefix="/production1", tags=["Produksi 1 & Barcode Traceability"])
@@ -1144,6 +1145,111 @@ async def list_custody_logs(
     current_user: dict = Depends(get_current_user)
 ):
     query = select(CustodyTransferLog)
+
+    user_role = (current_user.get("role") or "").upper()
+    user_div = (current_user.get("division") or "").upper()
+    user_st = (current_user.get("default_station") or "").upper()
+    sub = (current_user.get("sub") or "").lower()
+    is_admin_supervisor = (
+        user_role == "SUPERVISOR" or
+        "PPIC" in user_div or
+        "SUPERVISOR" in user_div or
+        sub in ["supervisor", "ppic", "api_client"]
+    )
+
+    # Batasi data riwayat yang dimuat sesuai wewenang divisi & stasiun pengguna (Non-Supervisor)
+    if not is_admin_supervisor:
+        if user_st == "MEAT" or "DAGING" in user_div or "GILING" in user_div:
+            query = query.where(
+                (CustodyTransferLog.station_id.in_(["MEAT_STATION", "MEAT_MIXING_STATION", "GRINDING_STATION"])) |
+                (CustodyTransferLog.target_station.in_(["MEAT_STATION", "MEAT_MIXING_STATION", "GRINDING_STATION"])) |
+                (CustodyTransferLog.lot_qr_code.like("DG-%")) |
+                (CustodyTransferLog.lot_qr_code.like("AD-%"))
+            ).where(
+                ~CustodyTransferLog.lot_qr_code.like("SA-%"),
+                ~CustodyTransferLog.lot_qr_code.like("SS-%"),
+                ~CustodyTransferLog.lot_qr_code.like("KL-%"),
+                ~CustodyTransferLog.lot_qr_code.like("BM-%"),
+                ~CustodyTransferLog.lot_qr_code.like("BS-%"),
+                ~CustodyTransferLog.lot_qr_code.like("FG-%"),
+                ~CustodyTransferLog.lot_qr_code.like("TR-%")
+            )
+        elif user_st == "SEASONING" or "BUMBU" in user_div:
+            query = query.where(
+                (CustodyTransferLog.station_id == "SEASONING_STATION") |
+                (CustodyTransferLog.target_station == "SEASONING_STATION") |
+                (CustodyTransferLog.lot_qr_code.like("BM-%")) |
+                (CustodyTransferLog.lot_qr_code.like("BS-%"))
+            ).where(
+                ~CustodyTransferLog.lot_qr_code.like("SA-%"),
+                ~CustodyTransferLog.lot_qr_code.like("SS-%"),
+                ~CustodyTransferLog.lot_qr_code.like("KL-%"),
+                ~CustodyTransferLog.lot_qr_code.like("DG-%"),
+                ~CustodyTransferLog.lot_qr_code.like("AD-%"),
+                ~CustodyTransferLog.lot_qr_code.like("FG-%"),
+                ~CustodyTransferLog.lot_qr_code.like("TR-%")
+            )
+        elif user_st == "WRAPPER" or "KULIT" in user_div:
+            query = query.where(
+                (CustodyTransferLog.station_id.in_(["WRAPPER_STATION", "SKIN_STATION"])) |
+                (CustodyTransferLog.target_station.in_(["WRAPPER_STATION", "SKIN_STATION"])) |
+                (CustodyTransferLog.lot_qr_code.like("KL-%"))
+            ).where(
+                ~CustodyTransferLog.lot_qr_code.like("SA-%"),
+                ~CustodyTransferLog.lot_qr_code.like("SS-%"),
+                ~CustodyTransferLog.lot_qr_code.like("BM-%"),
+                ~CustodyTransferLog.lot_qr_code.like("BS-%"),
+                ~CustodyTransferLog.lot_qr_code.like("DG-%"),
+                ~CustodyTransferLog.lot_qr_code.like("AD-%"),
+                ~CustodyTransferLog.lot_qr_code.like("FG-%"),
+                ~CustodyTransferLog.lot_qr_code.like("TR-%")
+            )
+        elif user_st == "SAUCE" or "SAOS" in user_div:
+            query = query.where(
+                (CustodyTransferLog.station_id == "SAUCE_STATION") |
+                (CustodyTransferLog.target_station == "SAUCE_STATION") |
+                (CustodyTransferLog.lot_qr_code.like("SA-%")) |
+                (CustodyTransferLog.lot_qr_code.like("SS-%"))
+            ).where(
+                ~CustodyTransferLog.lot_qr_code.like("KL-%"),
+                ~CustodyTransferLog.lot_qr_code.like("BM-%"),
+                ~CustodyTransferLog.lot_qr_code.like("BS-%"),
+                ~CustodyTransferLog.lot_qr_code.like("DG-%"),
+                ~CustodyTransferLog.lot_qr_code.like("AD-%"),
+                ~CustodyTransferLog.lot_qr_code.like("FG-%"),
+                ~CustodyTransferLog.lot_qr_code.like("TR-%")
+            )
+        elif user_st == "ASSEMBLY" or "CETAK" in user_div:
+            query = query.where(
+                (CustodyTransferLog.station_id == "ASSEMBLY_STATION") |
+                (CustodyTransferLog.target_station == "ASSEMBLY_STATION") |
+                (CustodyTransferLog.lot_qr_code.like("TR-%")) |
+                (CustodyTransferLog.lot_qr_code.like("AD-%")) |
+                (CustodyTransferLog.lot_qr_code.like("KL-%"))
+            ).where(
+                ~CustodyTransferLog.lot_qr_code.like("SA-%"),
+                ~CustodyTransferLog.lot_qr_code.like("SS-%"),
+                ~CustodyTransferLog.lot_qr_code.like("BM-%"),
+                ~CustodyTransferLog.lot_qr_code.like("BS-%"),
+                ~CustodyTransferLog.lot_qr_code.like("DG-%"),
+                # Jangan tampilkan QR_PRINTED bahan baku di stasiun cetak (itu dicetak di hulu)
+                ~((CustodyTransferLog.action_type == "QR_PRINTED") & ~CustodyTransferLog.lot_qr_code.like("TR-%"))
+            )
+        elif user_st == "PACKING" or "PACKING" in user_div:
+            query = query.where(
+                (CustodyTransferLog.station_id.in_(["PACKING_STATION", "FINISHING_STATION", "FREEZER_STATION"])) |
+                (CustodyTransferLog.target_station.in_(["PACKING_STATION", "FINISHING_STATION", "FREEZER_STATION"])) |
+                (CustodyTransferLog.lot_qr_code.like("FG-%")) |
+                (CustodyTransferLog.lot_qr_code.like("TR-%")) |
+                (CustodyTransferLog.lot_qr_code.like("SA-%")) |
+                (CustodyTransferLog.lot_qr_code.like("SS-%"))
+            ).where(
+                ~CustodyTransferLog.lot_qr_code.like("DG-%"),
+                ~CustodyTransferLog.lot_qr_code.like("AD-%"),
+                ~CustodyTransferLog.lot_qr_code.like("BM-%"),
+                ~CustodyTransferLog.lot_qr_code.like("BS-%")
+            )
+
     if station and station.upper() != "ALL":
         clean_st = station.upper().strip()
         query = query.where(
@@ -1599,6 +1705,7 @@ async def dev_wipe_database(
         await db.execute(delete(ScanEvent))
         await db.execute(delete(DiscrepancyLog))
         await db.execute(delete(LotTracking))
+        await db.execute(delete(ProductionBatch))
         await db.execute(delete(ProductionPlan))
         await db.execute(delete(ScanSetting))
 
@@ -1612,7 +1719,7 @@ async def dev_wipe_database(
             target_gilingan=0,
             target_mika_pax=0,
             target_vakum_pax=0,
-            status="ACTIVE",
+            status="DRAFT",
             created_by=current_user.get("operator_id") or "SYSTEM"
         )
         db.add(new_plan)
@@ -2078,6 +2185,89 @@ async def generate_daily_lots_all(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Gagal menerbitkan barcode massal PPIC: {str(e)}"
+        )
+
+
+@router.post("/generate-packaging-lots-batch", response_model=List[LotResponse], status_code=status.HTTP_201_CREATED)
+async def generate_packaging_lots_batch(
+    payload: GeneratePackagingBatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_ppic())
+):
+    """
+    Penerbitan QR Label Kemasan (Finished Goods) per Batch di Halaman Rencana (PPIC).
+    Mendukung pencetakan bertahap per roll (misal 50 atau 100 label stiker thermal 2-line).
+    """
+    prod_type = payload.product_type.strip().upper()
+    if prod_type not in ["FG_MIKA", "FG_VAKUM"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tipe produk kemasan harus 'FG_MIKA' atau 'FG_VAKUM'."
+        )
+
+    if payload.batch_qty <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Jumlah batch cetak harus minimal 1."
+        )
+
+    today_date = datetime.now(WIB).date()
+    today_str = today_wib()
+
+    plan_id = payload.plan_id
+    if not plan_id:
+        plan_res = await db.execute(select(ProductionPlan).where(ProductionPlan.plan_date == today_date).limit(1))
+        active_plan = plan_res.scalar_one_or_none()
+        plan_id = active_plan.plan_id if active_plan else f"PLAN-{today_str}-01"
+
+    prefix = "FG-MIKA" if prod_type == "FG_MIKA" else "FG-VAKUM"
+    start_idx = await get_next_lot_index(db, prefix)
+
+    qty_per_pack = 50.0 if prod_type == "FG_MIKA" else 25.0
+    unit_label = "MIKA" if prod_type == "FG_MIKA" else "PACK"
+    label_desc = "Dimsum Mika (50 pcs)" if prod_type == "FG_MIKA" else "Dimsum Vakum (25 pcs)"
+
+    created_lots = []
+    try:
+        for i in range(payload.batch_qty):
+            code = f"{prefix}-{today_str}-{str(start_idx + i).zfill(3)}"
+            lot = LotTracking(
+                lot_qr_code=code,
+                plan_id=plan_id,
+                lot_type=prod_type,
+                current_status="READY_IN_ASSEMBLY_STATION",
+                current_station="ASSEMBLY_STATION",
+                quantity=qty_per_pack,
+                unit=unit_label
+            )
+            db.add(lot)
+
+            log = CustodyTransferLog(
+                lot_qr_code=code,
+                action_type="FG_PREPRINTED",
+                station_id="PLAN",
+                target_station="ASSEMBLY_STATION",
+                user_id=payload.operator_id or current_user.get("operator_id") or "PPIC-AYU",
+                user_role_active=current_user.get("role") or "PPIC",
+                notes=f"Cetak batch kemasan {label_desc} ({payload.batch_qty} label stiker 2-line)"
+            )
+            db.add(log)
+            created_lots.append(lot)
+
+        await db.commit()
+
+        for l in created_lots:
+            await db.refresh(l)
+
+        return created_lots
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal menerbitkan batch kemasan: {str(e)}"
         )
 
 

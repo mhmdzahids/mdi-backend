@@ -3,6 +3,9 @@
 !.env.example
 
 venv/
+venv*/
+*.venv/
 __pycache__/
 *.pyc
 *.db
+.pytest_cache/

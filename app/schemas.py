@@ -144,6 +144,13 @@ class ConfirmStockInRequest(BaseModel):
     actual_weight_kg: Optional[float] = Field(default=None, description="Opsional: Timbangan aktual saat ditempel")
     notes: Optional[str] = Field(default=None, description="Catatan opsional dari pegawai")
 
+# Permintaan Cetak Batch QR Kemasan di Halaman Rencana (PPIC)
+class GeneratePackagingBatchRequest(BaseModel):
+    plan_id: Optional[str] = None
+    product_type: str = Field(..., description="FG_MIKA atau FG_VAKUM")
+    batch_qty: int = Field(..., ge=1, le=500, description="Jumlah pack yang ingin dicetak")
+    operator_id: Optional[str] = Field(default="PPIC-AYU", description="ID operator/admin PPIC")
+
 # --- Response Schemas ---
 class LotResponse(BaseModel):
     lot_qr_code: str
