@@ -186,6 +186,17 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     },
 
     # 8. Supervisor Global & PPIC
+    "ppic_ayu": {
+        "username": "ppic_ayu",
+        "password": "password123",
+        "operator_id": "PPIC-AYU",
+        "full_name": "Ayu (PPIC & Cetak Barcode)",
+        "role": "STAKEHOLDER",
+        "division": "PPIC / Administrasi Produksi",
+        "default_stage": "PROD_1",
+        "default_station": "PLAN",
+        "default_prod2_tab": "PRODUCTS"
+    },
     "supervisor": {
         "username": "supervisor",
         "password": "password123",
@@ -302,7 +313,25 @@ def is_global_supervisor(user: Dict[str, Any]) -> bool:
     sub = (user.get("sub") or user.get("username") or "").lower()
     op_id = (user.get("operator_id") or "").upper()
     div = (user.get("division") or "").upper()
-    return sub == "supervisor" or "YOSI" in op_id or "PPIC" in div or "SUPERVISOR" in div
+    return (
+        sub in ["supervisor", "ppic_ayu", "ayu"]
+        or "YOSI" in op_id
+        or "AYU" in op_id
+        or "PPIC" in div
+        or "SUPERVISOR" in div
+    )
+
+
+def require_ppic():
+    """Hanya Ayu atau Supervisor Global / PPIC yang berwenang menerbitkan barcode dan merencanakan produksi."""
+    async def ppic_checker(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+        if not is_global_supervisor(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Akses ditolak: Hanya PPIC (Ayu) yang berhak menerbitkan barcode dan mengelola rencana."
+            )
+        return current_user
+    return ppic_checker
 
 
 def require_division(allowed_keywords: list):

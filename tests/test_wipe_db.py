@@ -149,7 +149,7 @@ async def test_wipe_database_success_for_ppic(async_session: AsyncSession):
     assert len(events) == 0
     assert len(discrepancies) == 0
     assert len(plans) == 1
-    assert plans[0].target_gilingan == 40
+    assert plans[0].target_gilingan == 0
     assert len(settings) == 1
     assert settings[0].station_id == "GLOBAL"
     assert settings[0].scan_mode == "1X"

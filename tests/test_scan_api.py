@@ -8,11 +8,17 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from backend.app.models import Base, LotTracking, ScanSetting, ProductionPlan
-from backend.app.schemas import UpdateScanModeRequest, ScanTransitionRequest, ScanUndoRequest
+from backend.app.schemas import (
+    UpdateScanModeRequest,
+    ScanTransitionRequest,
+    ScanBatchTransitionRequest,
+    ScanUndoRequest
+)
 from backend.app.routers.scan import (
     get_scan_mode_settings,
     update_scan_mode_settings,
     process_scan_endpoint,
+    process_batch_scan_endpoint,
     undo_scan_endpoint,
     get_station_stock_endpoint
 )
@@ -107,3 +113,47 @@ async def test_router_process_scan_and_undo(async_session: AsyncSession):
     undo_res = await undo_scan_endpoint(payload=undo_req, db=async_session, current_user=operator_user)
     assert undo_res["success"] is True
     assert undo_res["current_status"] == "DICETAK"
+
+
+@pytest.mark.anyio
+async def test_router_process_batch_scan_intent(async_session: AsyncSession):
+    operator_user = {
+        "username": "opr_daging",
+        "operator_id": "OPR-DAGING-1",
+        "role": "OPERATOR",
+        "division": "Divisi Daging"
+    }
+
+    # Buat 2 lot adonan baru
+    lot1 = LotTracking(
+        lot_qr_code="AD-BATCH-001",
+        lot_type="ADONAN",
+        current_status="PRINTED_PENDING_STOCK_IN",
+        current_station="MEAT_STATION",
+        quantity=19,
+        unit="KG"
+    )
+    lot2 = LotTracking(
+        lot_qr_code="AD-BATCH-002",
+        lot_type="ADONAN",
+        current_status="PRINTED_PENDING_STOCK_IN",
+        current_station="MEAT_STATION",
+        quantity=19,
+        unit="KG"
+    )
+    async_session.add_all([lot1, lot2])
+    await async_session.commit()
+
+    # Eksekusi batch Scan Out di Mode 1X
+    batch_req = ScanBatchTransitionRequest(
+        lot_codes=["AD-BATCH-001", "AD-BATCH-002"],
+        station_id="MEAT_STATION",
+        intent="SCAN_OUT"
+    )
+    results = await process_batch_scan_endpoint(payload=batch_req, db=async_session, current_user=operator_user)
+    assert len(results) == 2
+    assert results[0]["success"] is True
+    assert results[0]["current_status"] == "IN_TRANSIT_TO_ASSEMBLY"
+    assert results[1]["success"] is True
+    assert results[1]["current_status"] == "IN_TRANSIT_TO_ASSEMBLY"
+
