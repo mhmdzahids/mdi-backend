@@ -111,16 +111,18 @@ def get_target_station_for_lot(lot: LotTracking, origin_station: str) -> str:
     qr = (lot.lot_qr_code or "").upper()
     lot_type = (lot.lot_type or "").upper()
 
-    if lot_type == "SAOS" or qr.startswith("SS-") or qr.startswith("SA-"):
+    if lot_type == "SAOS" or qr.startswith("SS-") or qr.startswith("SA-") or qr.startswith("IN-SA-"):
         return "FINISHING_STATION"
-    if lot_type == "KULIT" or qr.startswith("KL-"):
+    if lot_type == "KEMASAN" or qr.startswith("KM-") or qr.startswith("IN-KM-"):
+        return "FINISHING_STATION"
+    if lot_type == "KULIT" or qr.startswith("KL-") or qr.startswith("IN-KL-"):
         return "ASSEMBLY_STATION"
-    if lot_type == "ADONAN" or qr.startswith("AD-"):
+    if lot_type == "ADONAN" or qr.startswith("AD-") or qr.startswith("IN-AD-"):
         return "ASSEMBLY_STATION"
-    if lot_type == "BUMBU" or qr.startswith("BM-") or qr.startswith("SP-"):
+    if lot_type == "BUMBU" or qr.startswith("BM-") or qr.startswith("SP-") or qr.startswith("IN-BM-"):
         return "MEAT_STATION"
-    if lot_type == "DAGING" or qr.startswith("DG-") or qr.startswith("MEAT-"):
-        return "SEASONING_STATION"
+    if lot_type == "DAGING" or qr.startswith("DG-") or qr.startswith("MEAT-") or qr.startswith("IN-DG-"):
+        return "MEAT_STATION"
     return STATION_METADATA.get(origin_station, {}).get("target", "ASSEMBLY_STATION")
 
 
@@ -351,6 +353,9 @@ async def execute_scan_transition(
             if target_st == "ASSEMBLY_STATION":
                 new_status = "IN_ASSEMBLY_STATION"
                 lot.current_station = "ASSEMBLY_STATION"
+                action_type = "SCAN_IN"
+                feedback_message = f"Bahan diterima: {lot.lot_qr_code} telah diterima di {target_name}."
+                semantic_variant = "success"
             elif target_st == "MEAT_STATION":
                 new_status = "IN_MEAT_MIXING_STATION"
                 lot.current_station = "MEAT_STATION"

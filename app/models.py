@@ -184,6 +184,27 @@ class SupplierInbound(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# 8b. SUPPLIER OUTBOUND / PENGELUARAN STOK LOGISTIK PPIC
+class SupplierOutbound(Base):
+    __tablename__ = "supplier_outbounds"
+
+    outbound_id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    inbound_id = Column(BigInteger().with_variant(Integer, "sqlite"), ForeignKey("supplier_inbounds.inbound_id"), nullable=True)
+    outbound_date = Column(Date, nullable=False, default=datetime.utcnow)
+    lot_qr_code = Column(String(100), nullable=False, index=True)
+    category = Column(String(50), nullable=False)
+    item_name = Column(String(100), nullable=False)
+    quantity = Column(Numeric(10, 2), nullable=False)
+    unit = Column(String(20), nullable=False)
+    target_station = Column(String(50), nullable=True)  # 'ASSEMBLY_STATION', 'MEAT_STATION', 'FINISHING_STATION', etc.
+    target_station_name = Column(String(100), nullable=True)
+    dispatched_by = Column(String(50), nullable=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    inbound = relationship("SupplierInbound", backref="outbounds")
+
+
 # 9. DIVISION DAILY NOTES & REJECT RECORD (CATATAN REKAP PPIC)
 class DivisionDailyNote(Base):
     __tablename__ = "division_daily_notes"

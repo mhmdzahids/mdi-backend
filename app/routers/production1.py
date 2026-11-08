@@ -18,6 +18,8 @@ from ..services.scan_engine import (
     get_effective_scan_mode,
     normalize_status,
     normalize_station_id,
+    get_in_transit_status_name,
+    STATION_METADATA,
 )
 from ..database import get_db
 from ..auth import require_role, require_division, get_current_user, is_global_supervisor, require_ppic
@@ -32,6 +34,7 @@ from ..models import (
     ScanSetting,
     ScanEvent,
     SupplierInbound,
+    SupplierOutbound,
     DivisionDailyNote
 )
 from ..schemas import (
@@ -65,6 +68,8 @@ from ..schemas import (
     VoidLotsRequest,
     SupplierInboundCreate,
     SupplierInboundResponse,
+    SupplierOutboundCreate,
+    SupplierOutboundResponse,
     DivisionDailyNoteCreate,
     DivisionDailyNoteResponse,
     GenerateDailyLotsAllRequest,
@@ -2855,6 +2860,158 @@ async def list_supplier_inbound(
     if category:
         query = query.where(SupplierInbound.category == category.upper())
     query = query.order_by(desc(SupplierInbound.inbound_date), desc(SupplierInbound.created_at))
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+# ============================================================================
+# 16b. PENGELUARAN BARANG LOGISTIK PPIC (BARANG KELUAR / OUTBOUND KE DIVISI)
+# ============================================================================
+
+@router.post("/supplier-outbound", response_model=SupplierOutboundResponse, status_code=status.HTTP_201_CREATED)
+async def create_supplier_outbound(
+    payload: SupplierOutboundCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_ppic())
+):
+    """
+    Mencatat pengeluaran stok barang logistik oleh PPIC dan otomatis menerbitkan
+    QR tracking lot berstatus IN_TRANSIT jika dikirim ke divisi tertentu (misal: Cetak, Giling, dll).
+    """
+    if current_user and not is_global_supervisor(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak: Hanya PPIC (Ayu) yang berhak mencatat pengeluaran barang logistik."
+        )
+
+    try:
+        outbound_date = payload.outbound_date or datetime.now(WIB).date()
+        today_code = outbound_date.strftime("%Y%m%d")
+        cat = payload.category.upper()
+        cat_prefix = "KL" if cat == "KULIT" else "DG" if cat == "DAGING" else "BM" if cat == "BUMBU" else "SA" if cat == "SAOS" else "KM" if cat == "KEMASAN" else "SP"
+
+        # Tentukan kode QR
+        if payload.lot_qr_code and payload.lot_qr_code.strip():
+            lot_code = payload.lot_qr_code.strip().upper()
+        else:
+            stmt_cnt = select(func.count(SupplierOutbound.outbound_id)).where(SupplierOutbound.outbound_date == outbound_date)
+            res_cnt = await db.execute(stmt_cnt)
+            seq = (res_cnt.scalar() or 0) + 1
+            lot_code = f"IN-{cat_prefix}-{today_code}-{str(seq).zfill(3)}"
+
+        # Simpan record outbound
+        outbound = SupplierOutbound(
+            inbound_id=payload.inbound_id,
+            outbound_date=outbound_date,
+            lot_qr_code=lot_code,
+            category=cat,
+            item_name=payload.item_name,
+            quantity=payload.quantity,
+            unit=payload.unit.upper(),
+            target_station=payload.target_station,
+            target_station_name=payload.target_station_name,
+            dispatched_by=payload.dispatched_by or current_user.get("operator_id") or "PPIC-AYU",
+            notes=payload.notes,
+            created_at=datetime.utcnow()
+        )
+        db.add(outbound)
+
+        # Jika memiliki stasiun tujuan produksi, daftarkan ke LotTracking & CustodyTransferLog
+        target_st_raw = (payload.target_station or "").strip().upper()
+        if target_st_raw and target_st_raw != "UMUM":
+            target_st = normalize_station_id(target_st_raw)
+            target_status = get_in_transit_status_name(target_st)
+            target_name = payload.target_station_name or STATION_METADATA.get(target_st, {}).get("name", target_st)
+
+            # Cek apakah lot sudah ada
+            stmt_lot = select(LotTracking).where(LotTracking.lot_qr_code == lot_code)
+            res_lot = await db.execute(stmt_lot)
+            existing_lot = res_lot.scalar_one_or_none()
+
+            if not existing_lot:
+                new_lot = LotTracking(
+                    lot_qr_code=lot_code,
+                    plan_id=None,
+                    lot_type=cat,
+                    current_status=target_status,
+                    current_station="PPIC_WAREHOUSE",
+                    quantity=payload.quantity,
+                    unit=payload.unit.upper(),
+                    created_at=datetime.utcnow()
+                )
+                db.add(new_lot)
+            else:
+                existing_lot.current_status = target_status
+                existing_lot.current_station = "PPIC_WAREHOUSE"
+                existing_lot.quantity = payload.quantity
+                existing_lot.unit = payload.unit.upper()
+
+            # Catat log serah terima (Custody Transfer)
+            c_log = CustodyTransferLog(
+                lot_qr_code=lot_code,
+                action_type="SCAN_OUT",
+                station_id="PPIC",
+                target_station=target_st,
+                user_id=payload.dispatched_by or current_user.get("operator_id") or "PPIC-AYU",
+                user_role_active="PPIC",
+                notes=f"Kirim stok {payload.item_name} ({payload.quantity} {payload.unit.upper()}) ke {target_name}. {payload.notes or ''}".strip(),
+                timestamp=datetime.utcnow()
+            )
+            db.add(c_log)
+
+        await db.commit()
+        await db.refresh(outbound)
+        return outbound
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal mencatat pengeluaran barang logistik: {str(e)}"
+        )
+
+
+@router.get("/supplier-outbound", response_model=List[SupplierOutboundResponse])
+async def list_supplier_outbound(
+    outbound_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    category: Optional[str] = None,
+    all_time: Optional[bool] = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Daftar pengeluaran barang logistik PPIC ke divisi produksi maupun keluar umum.
+    """
+    if all_time:
+        query = select(SupplierOutbound)
+    elif start_date and end_date:
+        d_start = parse_date_param(start_date)
+        d_end = parse_date_param(end_date)
+        if d_start > d_end:
+            d_start, d_end = d_end, d_start
+        query = select(SupplierOutbound).where(SupplierOutbound.outbound_date.between(d_start, d_end))
+    elif outbound_date:
+        target_date = parse_date_param(outbound_date)
+        query = select(SupplierOutbound).where(SupplierOutbound.outbound_date == target_date)
+    elif start_date:
+        target_date = parse_date_param(start_date)
+        query = select(SupplierOutbound).where(SupplierOutbound.outbound_date == target_date)
+    elif end_date:
+        target_date = parse_date_param(end_date)
+        query = select(SupplierOutbound).where(SupplierOutbound.outbound_date == target_date)
+    else:
+        # Default jika tanpa parameter: muat hari ini dan kemarin
+        today_wib = datetime.now(WIB).date()
+        yesterday_wib = today_wib - timedelta(days=1)
+        query = select(SupplierOutbound).where(SupplierOutbound.outbound_date.between(yesterday_wib, today_wib))
+
+    if category:
+        query = query.where(SupplierOutbound.category == category.upper())
+    query = query.order_by(desc(SupplierOutbound.outbound_date), desc(SupplierOutbound.created_at))
     result = await db.execute(query)
     return result.scalars().all()
 
