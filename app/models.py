@@ -181,6 +181,7 @@ class SupplierInbound(Base):
     document_no = Column(String(100), nullable=True)  # No Surat Jalan / Nota
     notes = Column(Text, nullable=True)
     received_by = Column(String(50), nullable=False)
+    has_qr = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

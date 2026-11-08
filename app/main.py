@@ -65,6 +65,7 @@ async def on_startup():
             "ALTER TABLE production_plans ADD COLUMN published_at DATETIME",
             "ALTER TABLE production_plans ADD COLUMN published_by TEXT",
             "ALTER TABLE production_plans ADD COLUMN updated_at DATETIME",
+            "ALTER TABLE supplier_inbounds ADD COLUMN has_qr BOOLEAN DEFAULT 1",
         ]
         for m in migrations:
             try:

@@ -459,6 +459,7 @@ class SupplierInboundCreate(BaseModel):
     notes: Optional[str] = Field(default=None, example="Kemasan utuh dan bersih")
     received_by: Optional[str] = Field(default="PPIC-AYU")
     inbound_date: Optional[date] = None
+    has_qr: Optional[bool] = True
 
 
 class SupplierInboundResponse(BaseModel):
@@ -472,6 +473,7 @@ class SupplierInboundResponse(BaseModel):
     document_no: Optional[str] = None
     notes: Optional[str] = None
     received_by: str
+    has_qr: bool = True
     created_at: datetime
 
     class Config:

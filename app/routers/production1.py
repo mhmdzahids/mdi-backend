@@ -1713,6 +1713,9 @@ async def dev_wipe_database(
         await db.execute(delete(ProductionBatch))
         await db.execute(delete(ProductionPlan))
         await db.execute(delete(ScanSetting))
+        await db.execute(delete(SupplierOutbound))
+        await db.execute(delete(SupplierInbound))
+        await db.execute(delete(DivisionDailyNote))
 
         # 2. Re-seed ProductionPlan default hari ini (WIB)
         today = datetime.now(WIB).date()
@@ -2806,7 +2809,8 @@ async def create_supplier_inbound(
             supplier_name=payload.supplier_name,
             document_no=payload.document_no,
             notes=payload.notes,
-            received_by=payload.received_by or current_user.get("operator_id") or "PPIC-AYU"
+            received_by=payload.received_by or current_user.get("operator_id") or "PPIC-AYU",
+            has_qr=True if payload.has_qr is None else bool(payload.has_qr)
         )
         db.add(inbound)
         await db.commit()
@@ -2890,14 +2894,45 @@ async def create_supplier_outbound(
         cat = payload.category.upper()
         cat_prefix = "KL" if cat == "KULIT" else "DG" if cat == "DAGING" else "BM" if cat == "BUMBU" else "SA" if cat == "SAOS" else "KM" if cat == "KEMASAN" else "SP"
 
-        # Tentukan kode QR
+        # Validasi sisa stok barang masuk ketat (mencegah bug pengeluaran saat stok habis)
+        if payload.inbound_id:
+            stmt_in = select(SupplierInbound).where(SupplierInbound.inbound_id == payload.inbound_id)
+            res_in = await db.execute(stmt_in)
+            inbound_rec = res_in.scalar_one_or_none()
+            if not inbound_rec:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Data barang masuk dengan ID {payload.inbound_id} tidak ditemukan."
+                )
+
+            stmt_out_sum = select(func.coalesce(func.sum(SupplierOutbound.quantity), 0)).where(
+                SupplierOutbound.inbound_id == payload.inbound_id
+            )
+            res_out_sum = await db.execute(stmt_out_sum)
+            already_out = float(res_out_sum.scalar() or 0)
+            total_in = float(inbound_rec.quantity or 0)
+            remaining_stock = total_in - already_out
+
+            if remaining_stock <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Stok untuk '{inbound_rec.item_name}' sudah habis (0 {inbound_rec.unit}). Tidak dapat mengeluarkan stok lagi."
+                )
+
+            if float(payload.quantity) > remaining_stock:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Jumlah pengeluaran ({payload.quantity} {inbound_rec.unit}) melebihi sisa stok yang tersedia ({remaining_stock} {inbound_rec.unit})."
+                )
+
+        # Internal reference code untuk audit trail
         if payload.lot_qr_code and payload.lot_qr_code.strip():
             lot_code = payload.lot_qr_code.strip().upper()
         else:
             stmt_cnt = select(func.count(SupplierOutbound.outbound_id)).where(SupplierOutbound.outbound_date == outbound_date)
             res_cnt = await db.execute(stmt_cnt)
             seq = (res_cnt.scalar() or 0) + 1
-            lot_code = f"IN-{cat_prefix}-{today_code}-{str(seq).zfill(3)}"
+            lot_code = f"OUT-{cat_prefix}-{today_code}-{str(seq).zfill(3)}"
 
         # Simpan record outbound
         outbound = SupplierOutbound(
@@ -2915,50 +2950,6 @@ async def create_supplier_outbound(
             created_at=datetime.utcnow()
         )
         db.add(outbound)
-
-        # Jika memiliki stasiun tujuan produksi, daftarkan ke LotTracking & CustodyTransferLog
-        target_st_raw = (payload.target_station or "").strip().upper()
-        if target_st_raw and target_st_raw != "UMUM":
-            target_st = normalize_station_id(target_st_raw)
-            target_status = get_in_transit_status_name(target_st)
-            target_name = payload.target_station_name or STATION_METADATA.get(target_st, {}).get("name", target_st)
-
-            # Cek apakah lot sudah ada
-            stmt_lot = select(LotTracking).where(LotTracking.lot_qr_code == lot_code)
-            res_lot = await db.execute(stmt_lot)
-            existing_lot = res_lot.scalar_one_or_none()
-
-            if not existing_lot:
-                new_lot = LotTracking(
-                    lot_qr_code=lot_code,
-                    plan_id=None,
-                    lot_type=cat,
-                    current_status=target_status,
-                    current_station="PPIC_WAREHOUSE",
-                    quantity=payload.quantity,
-                    unit=payload.unit.upper(),
-                    created_at=datetime.utcnow()
-                )
-                db.add(new_lot)
-            else:
-                existing_lot.current_status = target_status
-                existing_lot.current_station = "PPIC_WAREHOUSE"
-                existing_lot.quantity = payload.quantity
-                existing_lot.unit = payload.unit.upper()
-
-            # Catat log serah terima (Custody Transfer)
-            c_log = CustodyTransferLog(
-                lot_qr_code=lot_code,
-                action_type="SCAN_OUT",
-                station_id="PPIC",
-                target_station=target_st,
-                user_id=payload.dispatched_by or current_user.get("operator_id") or "PPIC-AYU",
-                user_role_active="PPIC",
-                notes=f"Kirim stok {payload.item_name} ({payload.quantity} {payload.unit.upper()}) ke {target_name}. {payload.notes or ''}".strip(),
-                timestamp=datetime.utcnow()
-            )
-            db.add(c_log)
-
         await db.commit()
         await db.refresh(outbound)
         return outbound
