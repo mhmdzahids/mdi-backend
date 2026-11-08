@@ -399,6 +399,11 @@ async def execute_scan_transition(
                         feedback_message = f"Masuk stok: Fisik barang terkonfirmasi ada di {origin_name}."
                     semantic_variant = "info"
                 elif current_norm == "DI_STOK":
+                    if op_st == "MEAT_STATION" or is_meat_adonan:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Adonan tidak bisa di-scan in, melainkan di-scan out untuk dikirim ke bagian Cetak."
+                        )
                     # Idempoten: barang sudah scan in
                     return {
                         "success": True,
@@ -416,7 +421,7 @@ async def execute_scan_transition(
                 elif current_norm == "KELUAR":
                     raise HTTPException(
                         status_code=400,
-                        detail="Barang sudah discan out / dikirim."
+                        detail="Barang sudah discan out / dikirim ke divisi berikutnya."
                     )
                 else:
                     raise HTTPException(
@@ -424,21 +429,15 @@ async def execute_scan_transition(
                         detail=f"Barang sudah dalam status '{lot.current_status}'."
                     )
             else:
-                # Mode 1x: Scan In tidak wajib untuk barang produksi divisi sendiri
-                msg = "Mode 1x aktif: tidak perlu scan in adonan." if op_st == "MEAT_STATION" else "Mode 1x aktif: Scan In hanya berlaku untuk barang masuk dari divisi lain."
-                return {
-                    "success": True,
-                    "is_duplicate": False,
-                    "lot_code": clean_code,
-                    "action": "NOOP",
-                    "previous_status": lot.current_status,
-                    "current_status": lot.current_status,
-                    "normalized_status": current_norm,
-                    "mode": mode,
-                    "message": msg,
-                    "semantic_variant": "info",
-                    "can_undo": False
-                }
+                # Mode 1x: Barang produksi sendiri tidak bisa di-scan in, melainkan langsung di-scan out
+                if op_st == "MEAT_STATION" or is_meat_adonan:
+                    detail_msg = "Adonan tidak bisa di-scan in, melainkan di-scan out untuk dikirim ke bagian Cetak."
+                else:
+                    detail_msg = f"{origin_name} tidak bisa di-scan in. Silakan gunakan tombol Scan Out untuk mengirim ke {target_name}."
+                raise HTTPException(
+                    status_code=400,
+                    detail=detail_msg
+                )
         else:
             raise HTTPException(
                 status_code=400,

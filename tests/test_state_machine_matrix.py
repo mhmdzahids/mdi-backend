@@ -492,17 +492,17 @@ async def test_meat_station_adonan_scan_in_modes(async_session: AsyncSession):
     async_session.add(ad_1)
     await async_session.commit()
 
-    res_1x = await execute_scan_transition(
-        db=async_session,
-        lot_code="AD-20261025-M10",
-        operator_station_id="MEAT_STATION",
-        user_id="OPR-DAGING",
-        user_role="OPERATOR_DAGING",
-        intent="SCAN_IN"
-    )
-    assert res_1x["success"] is True
-    assert res_1x["action"] == "NOOP"
-    assert "tidak perlu scan in adonan" in res_1x["message"]
+    with pytest.raises(HTTPException) as exc_info:
+        await execute_scan_transition(
+            db=async_session,
+            lot_code="AD-20261025-M10",
+            operator_station_id="MEAT_STATION",
+            user_id="OPR-DAGING",
+            user_role="OPERATOR_DAGING",
+            intent="SCAN_IN"
+        )
+    assert exc_info.value.status_code == 400
+    assert "tidak bisa di-scan in" in exc_info.value.detail
 
     # Mode 2x
     await async_session.execute(
