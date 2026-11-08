@@ -18,6 +18,8 @@ from ..services.scan_engine import (
     get_effective_scan_mode,
     normalize_status,
     normalize_station_id,
+    get_in_transit_status_name,
+    STATION_METADATA,
 )
 from ..database import get_db
 from ..auth import require_role, require_division, get_current_user, is_global_supervisor, require_ppic
@@ -32,6 +34,7 @@ from ..models import (
     ScanSetting,
     ScanEvent,
     SupplierInbound,
+    SupplierOutbound,
     DivisionDailyNote
 )
 from ..schemas import (
@@ -65,6 +68,8 @@ from ..schemas import (
     VoidLotsRequest,
     SupplierInboundCreate,
     SupplierInboundResponse,
+    SupplierOutboundCreate,
+    SupplierOutboundResponse,
     DivisionDailyNoteCreate,
     DivisionDailyNoteResponse,
     GenerateDailyLotsAllRequest,
@@ -2791,9 +2796,9 @@ async def create_supplier_inbound(
         )
 
     try:
-        today = datetime.now(WIB).date()
+        inbound_date = payload.inbound_date or datetime.now(WIB).date()
         inbound = SupplierInbound(
-            inbound_date=today,
+            inbound_date=inbound_date,
             category=payload.category.upper(),
             item_name=payload.item_name,
             quantity=payload.quantity,
@@ -2847,12 +2852,166 @@ async def list_supplier_inbound(
         target_date = parse_date_param(end_date)
         query = select(SupplierInbound).where(SupplierInbound.inbound_date == target_date)
     else:
-        target_date = parse_date_param(None)
-        query = select(SupplierInbound).where(SupplierInbound.inbound_date == target_date)
+        # Default jika tanpa parameter: muat hari ini dan kemarin agar pergantian hari (00:00) tidak mengosongkan riwayat
+        today_wib = datetime.now(WIB).date()
+        yesterday_wib = today_wib - timedelta(days=1)
+        query = select(SupplierInbound).where(SupplierInbound.inbound_date.between(yesterday_wib, today_wib))
 
     if category:
         query = query.where(SupplierInbound.category == category.upper())
     query = query.order_by(desc(SupplierInbound.inbound_date), desc(SupplierInbound.created_at))
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+# ============================================================================
+# 16b. PENGELUARAN BARANG LOGISTIK PPIC (BARANG KELUAR / OUTBOUND KE DIVISI)
+# ============================================================================
+
+@router.post("/supplier-outbound", response_model=SupplierOutboundResponse, status_code=status.HTTP_201_CREATED)
+async def create_supplier_outbound(
+    payload: SupplierOutboundCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_ppic())
+):
+    """
+    Mencatat pengeluaran stok barang logistik oleh PPIC dan otomatis menerbitkan
+    QR tracking lot berstatus IN_TRANSIT jika dikirim ke divisi tertentu (misal: Cetak, Giling, dll).
+    """
+    if current_user and not is_global_supervisor(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak: Hanya PPIC (Ayu) yang berhak mencatat pengeluaran barang logistik."
+        )
+
+    try:
+        outbound_date = payload.outbound_date or datetime.now(WIB).date()
+        today_code = outbound_date.strftime("%Y%m%d")
+        cat = payload.category.upper()
+        cat_prefix = "KL" if cat == "KULIT" else "DG" if cat == "DAGING" else "BM" if cat == "BUMBU" else "SA" if cat == "SAOS" else "KM" if cat == "KEMASAN" else "SP"
+
+        # Tentukan kode QR
+        if payload.lot_qr_code and payload.lot_qr_code.strip():
+            lot_code = payload.lot_qr_code.strip().upper()
+        else:
+            stmt_cnt = select(func.count(SupplierOutbound.outbound_id)).where(SupplierOutbound.outbound_date == outbound_date)
+            res_cnt = await db.execute(stmt_cnt)
+            seq = (res_cnt.scalar() or 0) + 1
+            lot_code = f"IN-{cat_prefix}-{today_code}-{str(seq).zfill(3)}"
+
+        # Simpan record outbound
+        outbound = SupplierOutbound(
+            inbound_id=payload.inbound_id,
+            outbound_date=outbound_date,
+            lot_qr_code=lot_code,
+            category=cat,
+            item_name=payload.item_name,
+            quantity=payload.quantity,
+            unit=payload.unit.upper(),
+            target_station=payload.target_station,
+            target_station_name=payload.target_station_name,
+            dispatched_by=payload.dispatched_by or current_user.get("operator_id") or "PPIC-AYU",
+            notes=payload.notes,
+            created_at=datetime.utcnow()
+        )
+        db.add(outbound)
+
+        # Jika memiliki stasiun tujuan produksi, daftarkan ke LotTracking & CustodyTransferLog
+        target_st_raw = (payload.target_station or "").strip().upper()
+        if target_st_raw and target_st_raw != "UMUM":
+            target_st = normalize_station_id(target_st_raw)
+            target_status = get_in_transit_status_name(target_st)
+            target_name = payload.target_station_name or STATION_METADATA.get(target_st, {}).get("name", target_st)
+
+            # Cek apakah lot sudah ada
+            stmt_lot = select(LotTracking).where(LotTracking.lot_qr_code == lot_code)
+            res_lot = await db.execute(stmt_lot)
+            existing_lot = res_lot.scalar_one_or_none()
+
+            if not existing_lot:
+                new_lot = LotTracking(
+                    lot_qr_code=lot_code,
+                    plan_id=None,
+                    lot_type=cat,
+                    current_status=target_status,
+                    current_station="PPIC_WAREHOUSE",
+                    quantity=payload.quantity,
+                    unit=payload.unit.upper(),
+                    created_at=datetime.utcnow()
+                )
+                db.add(new_lot)
+            else:
+                existing_lot.current_status = target_status
+                existing_lot.current_station = "PPIC_WAREHOUSE"
+                existing_lot.quantity = payload.quantity
+                existing_lot.unit = payload.unit.upper()
+
+            # Catat log serah terima (Custody Transfer)
+            c_log = CustodyTransferLog(
+                lot_qr_code=lot_code,
+                action_type="SCAN_OUT",
+                station_id="PPIC",
+                target_station=target_st,
+                user_id=payload.dispatched_by or current_user.get("operator_id") or "PPIC-AYU",
+                user_role_active="PPIC",
+                notes=f"Kirim stok {payload.item_name} ({payload.quantity} {payload.unit.upper()}) ke {target_name}. {payload.notes or ''}".strip(),
+                timestamp=datetime.utcnow()
+            )
+            db.add(c_log)
+
+        await db.commit()
+        await db.refresh(outbound)
+        return outbound
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal mencatat pengeluaran barang logistik: {str(e)}"
+        )
+
+
+@router.get("/supplier-outbound", response_model=List[SupplierOutboundResponse])
+async def list_supplier_outbound(
+    outbound_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    category: Optional[str] = None,
+    all_time: Optional[bool] = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Daftar pengeluaran barang logistik PPIC ke divisi produksi maupun keluar umum.
+    """
+    if all_time:
+        query = select(SupplierOutbound)
+    elif start_date and end_date:
+        d_start = parse_date_param(start_date)
+        d_end = parse_date_param(end_date)
+        if d_start > d_end:
+            d_start, d_end = d_end, d_start
+        query = select(SupplierOutbound).where(SupplierOutbound.outbound_date.between(d_start, d_end))
+    elif outbound_date:
+        target_date = parse_date_param(outbound_date)
+        query = select(SupplierOutbound).where(SupplierOutbound.outbound_date == target_date)
+    elif start_date:
+        target_date = parse_date_param(start_date)
+        query = select(SupplierOutbound).where(SupplierOutbound.outbound_date == target_date)
+    elif end_date:
+        target_date = parse_date_param(end_date)
+        query = select(SupplierOutbound).where(SupplierOutbound.outbound_date == target_date)
+    else:
+        # Default jika tanpa parameter: muat hari ini dan kemarin
+        today_wib = datetime.now(WIB).date()
+        yesterday_wib = today_wib - timedelta(days=1)
+        query = select(SupplierOutbound).where(SupplierOutbound.outbound_date.between(yesterday_wib, today_wib))
+
+    if category:
+        query = query.where(SupplierOutbound.category == category.upper())
+    query = query.order_by(desc(SupplierOutbound.outbound_date), desc(SupplierOutbound.created_at))
     result = await db.execute(query)
     return result.scalars().all()
 
@@ -3039,6 +3198,23 @@ async def get_daily_recap(
             transit_count = sum(1 for l in lots if "TRANSIT" in (l.current_status or ""))
             ready_or_delivered = sum(1 for l in lots if "READY" in (l.current_status or "") or "STOCK" in (l.current_status or "") or "IN_" in (l.current_status or ""))
             consumed_count = sum(1 for l in lots if l.current_status == "CONSUMED")
+            void_count = sum(1 for l in lots if (l.current_status or "").upper() == "VOID")
+
+            pending_lots = [
+                {
+                    "lot_qr_code": l.lot_qr_code,
+                    "quantity": float(l.quantity or 0),
+                    "unit": l.unit or default_unit,
+                    "current_status": l.current_status
+                }
+                for l in lots if "PRINTED" in (l.current_status or "")
+            ]
+
+            completed_qty = sum(
+                float(l.quantity or 0)
+                for l in lots
+                if "READY" in (l.current_status or "") or "STOCK" in (l.current_status or "") or "IN_" in (l.current_status or "") or l.current_status == "CONSUMED"
+            )
 
             rej_sum = sum(n.reject_count or 0 for n in div_notes)
             rej_notes_items = [n for n in div_notes if n.reject_notes and n.reject_notes.strip()]
@@ -3063,10 +3239,13 @@ async def get_daily_recap(
                 "division": div_key,
                 "total_lots": len(lots),
                 "total_quantity": total_qty,
+                "completed_quantity": completed_qty,
                 "unit": default_unit,
                 "printed_count": printed_count,
                 "transit_count": transit_count,
                 "completed_count": ready_or_delivered + consumed_count,
+                "void_count": void_count,
+                "pending_lots": pending_lots,
                 "reject_count": rej_sum,
                 "reject_notes": agg_rej_notes,
                 "operational_notes": agg_op_notes,
@@ -3098,10 +3277,13 @@ async def get_daily_recap(
                 "division": div_key,
                 "total_lots": 0,
                 "total_quantity": 0,
+                "completed_quantity": 0,
                 "unit": default_unit,
                 "printed_count": 0,
                 "transit_count": 0,
                 "completed_count": 0,
+                "void_count": 0,
+                "pending_lots": [],
                 "reject_count": rej_sum,
                 "reject_notes": agg_rej_notes,
                 "operational_notes": agg_op_notes,
@@ -3118,6 +3300,8 @@ async def get_daily_recap(
         }
         total_reject = sum(d["reject_count"] for d in divisions_dict.values())
         total_lots_count = sum(d["total_lots"] for d in divisions_dict.values())
+        total_void_count = sum(d.get("void_count", 0) for d in divisions_dict.values())
+        total_pending_count = sum(d.get("printed_count", 0) for d in divisions_dict.values())
 
         inbound_serialized = [
             {
@@ -3161,6 +3345,8 @@ async def get_daily_recap(
             "target_gilingan": target_gilingan_sum,
             "total_reject": total_reject,
             "total_lots": total_lots_count,
+            "total_void": total_void_count,
+            "total_pending": total_pending_count,
             "divisions": divisions_dict,
             "supplier_inbound": inbound_serialized,
             "inbound": inbound_serialized,
@@ -3227,15 +3413,35 @@ async def get_daily_recap(
         transit_count = sum(1 for l in lots if "TRANSIT" in (l.current_status or ""))
         ready_or_delivered = sum(1 for l in lots if "READY" in (l.current_status or "") or "STOCK" in (l.current_status or "") or "IN_" in (l.current_status or ""))
         consumed_count = sum(1 for l in lots if l.current_status == "CONSUMED")
+        void_count = sum(1 for l in lots if (l.current_status or "").upper() == "VOID")
+
+        pending_lots = [
+            {
+                "lot_qr_code": l.lot_qr_code,
+                "quantity": float(l.quantity or 0),
+                "unit": l.unit or default_unit,
+                "current_status": l.current_status
+            }
+            for l in lots if "PRINTED" in (l.current_status or "")
+        ]
+
+        completed_qty = sum(
+            float(l.quantity or 0)
+            for l in lots
+            if "READY" in (l.current_status or "") or "STOCK" in (l.current_status or "") or "IN_" in (l.current_status or "") or l.current_status == "CONSUMED"
+        )
 
         return {
             "division": div_key,
             "total_lots": len(lots),
             "total_quantity": total_qty,
+            "completed_quantity": completed_qty,
             "unit": default_unit,
             "printed_count": printed_count,
             "transit_count": transit_count,
             "completed_count": ready_or_delivered + consumed_count,
+            "void_count": void_count,
+            "pending_lots": pending_lots,
             "reject_count": note.reject_count if note else 0,
             "reject_notes": note.reject_notes if note else "",
             "operational_notes": note.operational_notes if note else "",
@@ -3256,10 +3462,13 @@ async def get_daily_recap(
             "division": "CETAK",
             "total_lots": 0,
             "total_quantity": 0,
+            "completed_quantity": 0,
             "unit": "PCS",
             "printed_count": 0,
             "transit_count": 0,
             "completed_count": 0,
+            "void_count": 0,
+            "pending_lots": [],
             "reject_count": notes_map["CETAK"].reject_count if "CETAK" in notes_map else 0,
             "reject_notes": notes_map["CETAK"].reject_notes if "CETAK" in notes_map else "",
             "operational_notes": notes_map["CETAK"].operational_notes if "CETAK" in notes_map else "",
@@ -3269,10 +3478,13 @@ async def get_daily_recap(
             "division": "PACKING",
             "total_lots": 0,
             "total_quantity": 0,
+            "completed_quantity": 0,
             "unit": "PACK",
             "printed_count": 0,
             "transit_count": 0,
             "completed_count": 0,
+            "void_count": 0,
+            "pending_lots": [],
             "reject_count": notes_map["PACKING"].reject_count if "PACKING" in notes_map else 0,
             "reject_notes": notes_map["PACKING"].reject_notes if "PACKING" in notes_map else "",
             "operational_notes": notes_map["PACKING"].operational_notes if "PACKING" in notes_map else "",
@@ -3281,6 +3493,8 @@ async def get_daily_recap(
     }
     total_reject_single = sum(d["reject_count"] for d in divisions_single_dict.values())
     total_lots_single = sum(d["total_lots"] for d in divisions_single_dict.values())
+    total_void_single = sum(d.get("void_count", 0) for d in divisions_single_dict.values())
+    total_pending_single = sum(d.get("printed_count", 0) for d in divisions_single_dict.values())
 
     inbound_single_serialized = [
         {
@@ -3321,6 +3535,8 @@ async def get_daily_recap(
         "target_gilingan": plan.target_gilingan if plan else 0,
         "total_reject": total_reject_single,
         "total_lots": total_lots_single,
+        "total_void": total_void_single,
+        "total_pending": total_pending_single,
         "divisions": divisions_single_dict,
         "supplier_inbound": inbound_single_serialized,
         "inbound": inbound_single_serialized,

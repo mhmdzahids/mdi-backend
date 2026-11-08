@@ -111,16 +111,18 @@ def get_target_station_for_lot(lot: LotTracking, origin_station: str) -> str:
     qr = (lot.lot_qr_code or "").upper()
     lot_type = (lot.lot_type or "").upper()
 
-    if lot_type == "SAOS" or qr.startswith("SS-") or qr.startswith("SA-"):
+    if lot_type == "SAOS" or qr.startswith("SS-") or qr.startswith("SA-") or qr.startswith("IN-SA-"):
         return "FINISHING_STATION"
-    if lot_type == "KULIT" or qr.startswith("KL-"):
+    if lot_type == "KEMASAN" or qr.startswith("KM-") or qr.startswith("IN-KM-"):
+        return "FINISHING_STATION"
+    if lot_type == "KULIT" or qr.startswith("KL-") or qr.startswith("IN-KL-"):
         return "ASSEMBLY_STATION"
-    if lot_type == "ADONAN" or qr.startswith("AD-"):
+    if lot_type == "ADONAN" or qr.startswith("AD-") or qr.startswith("IN-AD-"):
         return "ASSEMBLY_STATION"
-    if lot_type == "BUMBU" or qr.startswith("BM-") or qr.startswith("SP-"):
+    if lot_type == "BUMBU" or qr.startswith("BM-") or qr.startswith("SP-") or qr.startswith("IN-BM-"):
         return "MEAT_STATION"
-    if lot_type == "DAGING" or qr.startswith("DG-") or qr.startswith("MEAT-"):
-        return "SEASONING_STATION"
+    if lot_type == "DAGING" or qr.startswith("DG-") or qr.startswith("MEAT-") or qr.startswith("IN-DG-"):
+        return "MEAT_STATION"
     return STATION_METADATA.get(origin_station, {}).get("target", "ASSEMBLY_STATION")
 
 
@@ -351,6 +353,9 @@ async def execute_scan_transition(
             if target_st == "ASSEMBLY_STATION":
                 new_status = "IN_ASSEMBLY_STATION"
                 lot.current_station = "ASSEMBLY_STATION"
+                action_type = "SCAN_IN"
+                feedback_message = f"Bahan diterima: {lot.lot_qr_code} telah diterima di {target_name}."
+                semantic_variant = "success"
             elif target_st == "MEAT_STATION":
                 new_status = "IN_MEAT_MIXING_STATION"
                 lot.current_station = "MEAT_STATION"
@@ -399,6 +404,11 @@ async def execute_scan_transition(
                         feedback_message = f"Masuk stok: Fisik barang terkonfirmasi ada di {origin_name}."
                     semantic_variant = "info"
                 elif current_norm == "DI_STOK":
+                    if op_st == "MEAT_STATION" or is_meat_adonan:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Adonan tidak bisa di-scan in, melainkan di-scan out untuk dikirim ke bagian Cetak."
+                        )
                     # Idempoten: barang sudah scan in
                     return {
                         "success": True,
@@ -416,7 +426,7 @@ async def execute_scan_transition(
                 elif current_norm == "KELUAR":
                     raise HTTPException(
                         status_code=400,
-                        detail="Barang sudah discan out / dikirim."
+                        detail="Barang sudah discan out / dikirim ke divisi berikutnya."
                     )
                 else:
                     raise HTTPException(
@@ -424,21 +434,15 @@ async def execute_scan_transition(
                         detail=f"Barang sudah dalam status '{lot.current_status}'."
                     )
             else:
-                # Mode 1x: Scan In tidak wajib untuk barang produksi divisi sendiri
-                msg = "Mode 1x aktif: tidak perlu scan in adonan." if op_st == "MEAT_STATION" else "Mode 1x aktif: Scan In hanya berlaku untuk barang masuk dari divisi lain."
-                return {
-                    "success": True,
-                    "is_duplicate": False,
-                    "lot_code": clean_code,
-                    "action": "NOOP",
-                    "previous_status": lot.current_status,
-                    "current_status": lot.current_status,
-                    "normalized_status": current_norm,
-                    "mode": mode,
-                    "message": msg,
-                    "semantic_variant": "info",
-                    "can_undo": False
-                }
+                # Mode 1x: Barang produksi sendiri tidak bisa di-scan in, melainkan langsung di-scan out
+                if op_st == "MEAT_STATION" or is_meat_adonan:
+                    detail_msg = "Adonan tidak bisa di-scan in, melainkan di-scan out untuk dikirim ke bagian Cetak."
+                else:
+                    detail_msg = f"{origin_name} tidak bisa di-scan in. Silakan gunakan tombol Scan Out untuk mengirim ke {target_name}."
+                raise HTTPException(
+                    status_code=400,
+                    detail=detail_msg
+                )
         else:
             raise HTTPException(
                 status_code=400,

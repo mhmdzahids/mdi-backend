@@ -458,6 +458,7 @@ class SupplierInboundCreate(BaseModel):
     document_no: Optional[str] = Field(default=None, example="SJ-20261029-01")
     notes: Optional[str] = Field(default=None, example="Kemasan utuh dan bersih")
     received_by: Optional[str] = Field(default="PPIC-AYU")
+    inbound_date: Optional[date] = None
 
 
 class SupplierInboundResponse(BaseModel):
@@ -471,6 +472,39 @@ class SupplierInboundResponse(BaseModel):
     document_no: Optional[str] = None
     notes: Optional[str] = None
     received_by: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SupplierOutboundCreate(BaseModel):
+    inbound_id: Optional[int] = None
+    lot_qr_code: Optional[str] = None
+    category: str = Field(..., example="KULIT")
+    item_name: str = Field(..., example="Kulit Dimsum 7 cm (Vakum)")
+    quantity: float = Field(..., gt=0, example=1.0)
+    unit: str = Field(default="BAL", example="BAL")
+    target_station: Optional[str] = Field(default=None, example="ASSEMBLY_STATION")
+    target_station_name: Optional[str] = Field(default=None, example="Meja Cetak")
+    dispatched_by: Optional[str] = Field(default="PPIC-AYU")
+    notes: Optional[str] = None
+    outbound_date: Optional[date] = None
+
+
+class SupplierOutboundResponse(BaseModel):
+    outbound_id: int
+    inbound_id: Optional[int] = None
+    outbound_date: date
+    lot_qr_code: str
+    category: str
+    item_name: str
+    quantity: float
+    unit: str
+    target_station: Optional[str] = None
+    target_station_name: Optional[str] = None
+    dispatched_by: str
+    notes: Optional[str] = None
     created_at: datetime
 
     class Config:
