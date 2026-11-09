@@ -3243,36 +3243,134 @@ async def get_daily_recap(
                 "updated_by": last_updated_by
             }
 
-        def summarize_range_prod2(div_key: str, default_unit: str) -> Dict[str, Any]:
-            div_notes = notes_by_div.get(div_key, [])
+        def calculate_range_cetak() -> Dict[str, Any]:
+            div_notes = notes_by_div.get("CETAK", [])
             rej_sum = sum(n.reject_count or 0 for n in div_notes)
             rej_notes_items = [n for n in div_notes if n.reject_notes and n.reject_notes.strip()]
-            if len(rej_notes_items) == 1:
-                agg_rej_notes = rej_notes_items[0].reject_notes.strip()
-            elif len(rej_notes_items) > 1:
-                agg_rej_notes = "; ".join(f"[{n.record_date.isoformat()}] {n.reject_notes.strip()}" for n in rej_notes_items)
-            else:
-                agg_rej_notes = ""
-
+            agg_rej_notes = "; ".join(f"[{n.record_date.isoformat()}] {n.reject_notes.strip()}" for n in rej_notes_items) if len(rej_notes_items) > 1 else (rej_notes_items[0].reject_notes.strip() if rej_notes_items else "")
             op_notes_items = [n for n in div_notes if n.operational_notes and n.operational_notes.strip()]
-            if len(op_notes_items) == 1:
-                agg_op_notes = op_notes_items[0].operational_notes.strip()
-            elif len(op_notes_items) > 1:
-                agg_op_notes = "; ".join(f"[{n.record_date.isoformat()}] {n.operational_notes.strip()}" for n in op_notes_items)
-            else:
-                agg_op_notes = ""
-
+            agg_op_notes = "; ".join(f"[{n.record_date.isoformat()}] {n.operational_notes.strip()}" for n in op_notes_items) if len(op_notes_items) > 1 else (op_notes_items[0].operational_notes.strip() if op_notes_items else "")
             last_updated_by = div_notes[-1].created_by if div_notes else "PPIC-AYU"
 
+            adonan_received_lots = [
+                l for l in all_range_lots
+                if (l.lot_type in ["ADONAN", "DAGING"] or l.lot_qr_code.startswith("AD-") or l.lot_qr_code.startswith("DG-"))
+                and (l.current_status in ["IN_ASSEMBLY_STATION", "READY_IN_ASSEMBLY_STATION", "CONSUMED"]
+                     or (l.current_station or "").upper() in ["ASSEMBLY_STATION", "CETAK"])
+            ]
+            adonan_received_count = len(adonan_received_lots)
+            adonan_received_qty = sum(float(l.quantity or 0) for l in adonan_received_lots)
+            adonan_transit_count = sum(
+                1 for l in all_range_lots
+                if (l.lot_type in ["ADONAN", "DAGING"] or l.lot_qr_code.startswith("AD-"))
+                and "TRANSIT" in (l.current_status or "")
+            )
+
+            kulit_received_lots = [
+                l for l in all_range_lots
+                if ("KULIT" in (l.lot_type or "").upper() or l.lot_qr_code.startswith("KL-"))
+                and (l.current_status in ["IN_ASSEMBLY_STATION", "READY_IN_ASSEMBLY_STATION", "CONSUMED"]
+                     or (l.current_station or "").upper() in ["ASSEMBLY_STATION", "CETAK"])
+            ]
+            kulit_received_count = len(kulit_received_lots)
+            kulit_received_qty = sum(float(l.quantity or 0) for l in kulit_received_lots)
+            kulit_transit_count = sum(
+                1 for l in all_range_lots
+                if ("KULIT" in (l.lot_type or "").upper() or l.lot_qr_code.startswith("KL-"))
+                and "TRANSIT" in (l.current_status or "")
+            )
+
+            fg_lots = [
+                l for l in all_range_lots
+                if (l.lot_type in ["FG_MIKA", "FG_VAKUM"] or l.lot_qr_code.startswith("FG-"))
+                and (l.current_status or "").upper() != "VOID"
+            ]
+            fg_mika_cnt = sum(1 for l in fg_lots if "MIKA" in (l.lot_type or l.lot_qr_code or ""))
+            fg_vakum_cnt = sum(1 for l in fg_lots if "VAKUM" in (l.lot_type or l.lot_qr_code or ""))
+            total_pcs = (fg_mika_cnt * 50) + (fg_vakum_cnt * 25)
+
             return {
-                "division": div_key,
-                "total_lots": 0,
-                "total_quantity": 0,
-                "completed_quantity": 0,
-                "unit": default_unit,
+                "division": "CETAK",
+                "name": "Meja Cetak",
+                "unit": "PCS",
+                "adonan_received_count": adonan_received_count,
+                "adonan_received_qty": adonan_received_qty,
+                "adonan_transit_count": adonan_transit_count,
+                "kulit_received_count": kulit_received_count,
+                "kulit_received_qty": kulit_received_qty,
+                "kulit_transit_count": kulit_transit_count,
+                "total_pcs_cetak": total_pcs,
+                "total_quantity": total_pcs,
+                "total_lots": adonan_received_count + kulit_received_count,
+                "completed_quantity": total_pcs,
                 "printed_count": 0,
+                "transit_count": adonan_transit_count + kulit_transit_count,
+                "completed_count": adonan_received_count + kulit_received_count,
+                "void_count": 0,
+                "pending_lots": [],
+                "reject_count": rej_sum,
+                "reject_notes": agg_rej_notes,
+                "operational_notes": agg_op_notes,
+                "updated_by": last_updated_by
+            }
+
+        def calculate_range_packing() -> Dict[str, Any]:
+            div_notes = notes_by_div.get("PACKING", [])
+            rej_sum = sum(n.reject_count or 0 for n in div_notes)
+            rej_notes_items = [n for n in div_notes if n.reject_notes and n.reject_notes.strip()]
+            agg_rej_notes = "; ".join(f"[{n.record_date.isoformat()}] {n.reject_notes.strip()}" for n in rej_notes_items) if len(rej_notes_items) > 1 else (rej_notes_items[0].reject_notes.strip() if rej_notes_items else "")
+            op_notes_items = [n for n in div_notes if n.operational_notes and n.operational_notes.strip()]
+            agg_op_notes = "; ".join(f"[{n.record_date.isoformat()}] {n.operational_notes.strip()}" for n in op_notes_items) if len(op_notes_items) > 1 else (op_notes_items[0].operational_notes.strip() if op_notes_items else "")
+            last_updated_by = div_notes[-1].created_by if div_notes else "PPIC-AYU"
+
+            target_mika_val = sum(int(p.target_mika_pax or ((p.order_mika or 0) + (p.bumper_mika or 0))) for p in plans)
+            target_vakum_val = sum(int(p.target_vakum_pax or ((p.order_vakum or 0) + (p.bumper_vakum or 0))) for p in plans)
+            target_total = target_mika_val + target_vakum_val
+
+            fg_lots = [
+                l for l in all_range_lots
+                if (l.lot_type in ["FG_MIKA", "FG_VAKUM"] or l.lot_qr_code.startswith("FG-"))
+                and (l.current_status or "").upper() != "VOID"
+            ]
+
+            packed_lots = [
+                l for l in fg_lots
+                if l.current_status in ["PACKED_VERIFIED", "IN_FREEZER_STORAGE", "IN_SALES_STOCK"]
+            ]
+            scan_mika = sum(1 for l in packed_lots if "MIKA" in (l.lot_type or l.lot_qr_code or ""))
+            scan_vakum = sum(1 for l in packed_lots if "VAKUM" in (l.lot_type or l.lot_qr_code or ""))
+            scan_total = scan_mika + scan_vakum
+
+            sales_lots = [
+                l for l in fg_lots
+                if l.current_status == "IN_SALES_STOCK"
+            ]
+            sales_mika = sum(1 for l in sales_lots if "MIKA" in (l.lot_type or l.lot_qr_code or ""))
+            sales_vakum = sum(1 for l in sales_lots if "VAKUM" in (l.lot_type or l.lot_qr_code or ""))
+            sales_total = sales_mika + sales_vakum
+
+            selisih = scan_total - sales_total
+
+            return {
+                "division": "PACKING",
+                "name": "Meja Packing",
+                "unit": "PACK",
+                "target_pack": target_total,
+                "target_mika": target_mika_val,
+                "target_vakum": target_vakum_val,
+                "scan_pack": scan_total,
+                "scan_mika": scan_mika,
+                "scan_vakum": scan_vakum,
+                "sales_pack": sales_total,
+                "sales_mika": sales_mika,
+                "sales_vakum": sales_vakum,
+                "selisih_sales": selisih,
+                "total_lots": scan_total,
+                "total_quantity": scan_total,
+                "completed_quantity": scan_total,
+                "printed_count": max(0, target_total - scan_total),
                 "transit_count": 0,
-                "completed_count": 0,
+                "completed_count": scan_total,
                 "void_count": 0,
                 "pending_lots": [],
                 "reject_count": rej_sum,
@@ -3286,8 +3384,8 @@ async def get_daily_recap(
             "BUMBU": summarize_range_div("BUMBU", "PORSI"),
             "KULIT": summarize_range_div("KULIT", "BAL"),
             "SAOS": summarize_range_div("SAOS", "BAL"),
-            "CETAK": summarize_range_prod2("CETAK", "PCS"),
-            "PACKING": summarize_range_prod2("PACKING", "PACK")
+            "CETAK": calculate_range_cetak(),
+            "PACKING": calculate_range_packing()
         }
         total_reject = sum(d["reject_count"] for d in divisions_dict.values())
         total_lots_count = sum(d["total_lots"] for d in divisions_dict.values())
@@ -3444,6 +3542,67 @@ async def get_daily_recap(
     plan_res = await db.execute(plan_query)
     plan = plan_res.scalar_one_or_none()
 
+    # Hitung metrik Meja Cetak (Single Date)
+    adonan_received_single = [
+        l for l in all_today_lots
+        if (l.lot_type in ["ADONAN", "DAGING"] or l.lot_qr_code.startswith("AD-") or l.lot_qr_code.startswith("DG-"))
+        and (l.current_status in ["IN_ASSEMBLY_STATION", "READY_IN_ASSEMBLY_STATION", "CONSUMED"]
+             or (l.current_station or "").upper() in ["ASSEMBLY_STATION", "CETAK"])
+    ]
+    adonan_cnt_single = len(adonan_received_single)
+    adonan_qty_single = sum(float(l.quantity or 0) for l in adonan_received_single)
+    adonan_transit_single = sum(
+        1 for l in all_today_lots
+        if (l.lot_type in ["ADONAN", "DAGING"] or l.lot_qr_code.startswith("AD-"))
+        and "TRANSIT" in (l.current_status or "")
+    )
+
+    kulit_received_single = [
+        l for l in all_today_lots
+        if ("KULIT" in (l.lot_type or "").upper() or l.lot_qr_code.startswith("KL-"))
+        and (l.current_status in ["IN_ASSEMBLY_STATION", "READY_IN_ASSEMBLY_STATION", "CONSUMED"]
+             or (l.current_station or "").upper() in ["ASSEMBLY_STATION", "CETAK"])
+    ]
+    kulit_cnt_single = len(kulit_received_single)
+    kulit_qty_single = sum(float(l.quantity or 0) for l in kulit_received_single)
+    kulit_transit_single = sum(
+        1 for l in all_today_lots
+        if ("KULIT" in (l.lot_type or "").upper() or l.lot_qr_code.startswith("KL-"))
+        and "TRANSIT" in (l.current_status or "")
+    )
+
+    fg_today_lots = [
+        l for l in all_today_lots
+        if (l.lot_type in ["FG_MIKA", "FG_VAKUM"] or l.lot_qr_code.startswith("FG-"))
+        and (l.current_status or "").upper() != "VOID"
+    ]
+    fg_mika_cnt_single = sum(1 for l in fg_today_lots if "MIKA" in (l.lot_type or l.lot_qr_code or ""))
+    fg_vakum_cnt_single = sum(1 for l in fg_today_lots if "VAKUM" in (l.lot_type or l.lot_qr_code or ""))
+    total_pcs_single = (fg_mika_cnt_single * 50) + (fg_vakum_cnt_single * 25)
+
+    # Hitung metrik Meja Packing (Single Date)
+    target_mika_single = int(plan.target_mika_pax or ((plan.order_mika or 0) + (plan.bumper_mika or 0))) if plan else 0
+    target_vakum_single = int(plan.target_vakum_pax or ((plan.order_vakum or 0) + (plan.bumper_vakum or 0))) if plan else 0
+    target_total_single = target_mika_single + target_vakum_single
+
+    packed_verified_single = [
+        l for l in fg_today_lots
+        if l.current_status in ["PACKED_VERIFIED", "IN_FREEZER_STORAGE", "IN_SALES_STOCK"]
+    ]
+    scan_mika_single = sum(1 for l in packed_verified_single if "MIKA" in (l.lot_type or l.lot_qr_code or ""))
+    scan_vakum_single = sum(1 for l in packed_verified_single if "VAKUM" in (l.lot_type or l.lot_qr_code or ""))
+    scan_total_single = scan_mika_single + scan_vakum_single
+
+    sales_acc_single = [
+        l for l in fg_today_lots
+        if l.current_status == "IN_SALES_STOCK"
+    ]
+    sales_mika_single = sum(1 for l in sales_acc_single if "MIKA" in (l.lot_type or l.lot_qr_code or ""))
+    sales_vakum_single = sum(1 for l in sales_acc_single if "VAKUM" in (l.lot_type or l.lot_qr_code or ""))
+    sales_total_single = sales_mika_single + sales_vakum_single
+
+    selisih_single = scan_total_single - sales_total_single
+
     divisions_single_dict = {
         "DAGING": summarize_div("DAGING", "KG"),
         "BUMBU": summarize_div("BUMBU", "PORSI"),
@@ -3451,13 +3610,21 @@ async def get_daily_recap(
         "SAOS": summarize_div("SAOS", "BAL"),
         "CETAK": {
             "division": "CETAK",
-            "total_lots": 0,
-            "total_quantity": 0,
-            "completed_quantity": 0,
+            "name": "Meja Cetak",
             "unit": "PCS",
+            "adonan_received_count": adonan_cnt_single,
+            "adonan_received_qty": adonan_qty_single,
+            "adonan_transit_count": adonan_transit_single,
+            "kulit_received_count": kulit_cnt_single,
+            "kulit_received_qty": kulit_qty_single,
+            "kulit_transit_count": kulit_transit_single,
+            "total_pcs_cetak": total_pcs_single,
+            "total_quantity": total_pcs_single,
+            "total_lots": adonan_cnt_single + kulit_cnt_single,
+            "completed_quantity": total_pcs_single,
             "printed_count": 0,
-            "transit_count": 0,
-            "completed_count": 0,
+            "transit_count": adonan_transit_single + kulit_transit_single,
+            "completed_count": adonan_cnt_single + kulit_cnt_single,
             "void_count": 0,
             "pending_lots": [],
             "reject_count": notes_map["CETAK"].reject_count if "CETAK" in notes_map else 0,
@@ -3467,13 +3634,24 @@ async def get_daily_recap(
         },
         "PACKING": {
             "division": "PACKING",
-            "total_lots": 0,
-            "total_quantity": 0,
-            "completed_quantity": 0,
+            "name": "Meja Packing",
             "unit": "PACK",
-            "printed_count": 0,
+            "target_pack": target_total_single,
+            "target_mika": target_mika_single,
+            "target_vakum": target_vakum_single,
+            "scan_pack": scan_total_single,
+            "scan_mika": scan_mika_single,
+            "scan_vakum": scan_vakum_single,
+            "sales_pack": sales_total_single,
+            "sales_mika": sales_mika_single,
+            "sales_vakum": sales_vakum_single,
+            "selisih_sales": selisih_single,
+            "total_lots": scan_total_single,
+            "total_quantity": scan_total_single,
+            "completed_quantity": scan_total_single,
+            "printed_count": max(0, target_total_single - scan_total_single),
             "transit_count": 0,
-            "completed_count": 0,
+            "completed_count": scan_total_single,
             "void_count": 0,
             "pending_lots": [],
             "reject_count": notes_map["PACKING"].reject_count if "PACKING" in notes_map else 0,
