@@ -1892,7 +1892,7 @@ async def generate_daily_lots_all(
                     lot_type="ADONAN",
                     current_status="READY_IN_MEAT_MIXING_STATION",
                     current_station="MEAT_MIXING_STATION",
-                    quantity=20.0,
+                    quantity=15.0,
                     unit="KG"
                 )
                 db.add(lot)
@@ -1919,8 +1919,8 @@ async def generate_daily_lots_all(
                     lot_type="BUMBU",
                     current_status="PRINTED_PENDING_STOCK_IN",
                     current_station="SEASONING_STATION",
-                    quantity=20.0,
-                    unit="PORSI"
+                    quantity=1.0,
+                    unit="KARUNG"
                 )
                 db.add(lot)
                 log = CustodyTransferLog(
@@ -2501,7 +2501,7 @@ async def add_production_batch(
                     lot_type="ADONAN",
                     current_status="READY_IN_MEAT_MIXING_STATION",
                     current_station="MEAT_MIXING_STATION",
-                    quantity=20.0,
+                    quantity=15.0,
                     unit="KG"
                 )
                 db.add(lot)
@@ -2528,8 +2528,8 @@ async def add_production_batch(
                     lot_type="BUMBU",
                     current_status="PRINTED_PENDING_STOCK_IN",
                     current_station="SEASONING_STATION",
-                    quantity=20.0,
-                    unit="PORSI"
+                    quantity=1.0,
+                    unit="KARUNG"
                 )
                 db.add(lot)
                 log = CustodyTransferLog(
@@ -3380,8 +3380,8 @@ async def get_daily_recap(
             }
 
         divisions_dict = {
-            "DAGING": summarize_range_div("DAGING", "KG"),
-            "BUMBU": summarize_range_div("BUMBU", "PORSI"),
+            "DAGING": summarize_range_div("DAGING", "Gilingan"),
+            "BUMBU": summarize_range_div("BUMBU", "Karung"),
             "KULIT": summarize_range_div("KULIT", "BAL"),
             "SAOS": summarize_range_div("SAOS", "BAL"),
             "CETAK": calculate_range_cetak(),
@@ -3604,8 +3604,8 @@ async def get_daily_recap(
     selisih_single = scan_total_single - sales_total_single
 
     divisions_single_dict = {
-        "DAGING": summarize_div("DAGING", "KG"),
-        "BUMBU": summarize_div("BUMBU", "PORSI"),
+        "DAGING": summarize_div("DAGING", "Gilingan"),
+        "BUMBU": summarize_div("BUMBU", "Karung"),
         "KULIT": summarize_div("KULIT", "BAL"),
         "SAOS": summarize_div("SAOS", "BAL"),
         "CETAK": {
