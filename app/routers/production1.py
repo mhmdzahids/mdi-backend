@@ -3077,6 +3077,274 @@ async def list_division_daily_notes(
     return result.scalars().all()
 
 
+# ============================================================================
+# 16c. EKSPOR LAPORAN PPIC (BARANG MASUK, KELUAR, INVENTORY & MUTASI)
+# ============================================================================
+
+@router.get("/ppic/export-report")
+async def get_ppic_export_report(
+    jenis_laporan: str = "INBOUND",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    category: Optional[str] = None,
+    supplier: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Endpoint Ekspor Laporan PPIC:
+    - Mendukung jenis_laporan: 'INBOUND', 'OUTBOUND', 'INVENTORY', 'ALL'
+    - Parameter: date_from, date_to, category, supplier
+    - Validasi: rentang maksimal 366 hari
+    - Mengembalikan data terstruktur beserta ringkasan agregat
+    """
+    # 1. Validasi Hak Akses (PPIC / Supervisor / PIC / Admin)
+    role = (current_user.get("role") or "").upper()
+    division = (current_user.get("division") or "").lower()
+    username = (current_user.get("username") or "").lower()
+    is_authorized = (
+        is_global_supervisor(current_user)
+        or role in ["STAKEHOLDER", "PIC", "SUPERVISOR", "ADMIN", "PPIC"]
+        or "ppic" in division
+        or "ayu" in username
+    )
+    if not is_authorized:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak: Hanya PPIC / Supervisor yang berhak mengunduh laporan Excel."
+        )
+
+    # 2. Parsing & Validasi Tanggal
+    d_from = parse_date_param(date_from)
+    d_to = parse_date_param(date_to)
+    if d_from > d_to:
+        d_from, d_to = d_to, d_from
+
+    day_diff = (d_to - d_from).days
+    if day_diff > 366:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Rentang tanggal maksimal 366 hari (1 tahun)."
+        )
+
+    jenis = (jenis_laporan or "INBOUND").upper()
+    cat_filter = category.upper() if category and category.upper() != "ALL" else None
+    sup_filter = supplier.strip() if supplier and supplier.strip() else None
+
+    inbound_items = []
+    outbound_items = []
+    inventory_items = []
+
+    # 3. Query Inbound
+    if jenis in ["INBOUND", "ALL", "INVENTORY"]:
+        in_query = select(SupplierInbound).where(
+            SupplierInbound.inbound_date.between(d_from, d_to)
+        )
+        if cat_filter:
+            in_query = in_query.where(SupplierInbound.category == cat_filter)
+        if sup_filter:
+            in_query = in_query.where(SupplierInbound.supplier_name.ilike(f"%{sup_filter}%"))
+        in_query = in_query.order_by(desc(SupplierInbound.inbound_date), desc(SupplierInbound.created_at)).limit(10000)
+        in_res = await db.execute(in_query)
+        inbound_records = in_res.scalars().all()
+        for item in inbound_records:
+            date_str = item.inbound_date.strftime("%Y%m%d") if item.inbound_date else today_wib()
+            c_prefix = "KL" if item.category == "KULIT" else "DG" if item.category == "DAGING" else "BM" if item.category == "BUMBU" else "SA" if item.category == "SAOS" else "KM" if item.category == "KEMASAN" else "SP"
+            lot_code = f"IN-{c_prefix}-{date_str}-{str(item.inbound_id).zfill(3)}"
+            inbound_items.append({
+                "inbound_id": item.inbound_id,
+                "inbound_date": item.inbound_date.isoformat() if hasattr(item.inbound_date, "isoformat") else str(item.inbound_date),
+                "created_at": item.created_at.isoformat() if hasattr(item.created_at, "isoformat") else str(item.created_at),
+                "category": item.category,
+                "item_name": item.item_name,
+                "quantity": float(item.quantity or 0),
+                "unit": item.unit,
+                "supplier_name": item.supplier_name,
+                "document_no": item.document_no or "-",
+                "notes": item.notes or "-",
+                "received_by": item.received_by or "PPIC",
+                "lot_code": lot_code,
+                "has_qr": bool(item.has_qr),
+                "verification_status": "Terverifikasi"
+            })
+
+    # 4. Query Outbound
+    if jenis in ["OUTBOUND", "ALL", "INVENTORY"]:
+        out_query = select(SupplierOutbound).where(
+            SupplierOutbound.outbound_date.between(d_from, d_to)
+        )
+        if cat_filter:
+            out_query = out_query.where(SupplierOutbound.category == cat_filter)
+        if sup_filter:
+            out_query = out_query.where(SupplierOutbound.item_name.ilike(f"%{sup_filter}%"))
+        out_query = out_query.order_by(desc(SupplierOutbound.outbound_date), desc(SupplierOutbound.created_at)).limit(10000)
+        out_res = await db.execute(out_query)
+        outbound_records = out_res.scalars().all()
+        for item in outbound_records:
+            outbound_items.append({
+                "outbound_id": item.outbound_id,
+                "inbound_id": item.inbound_id,
+                "outbound_date": item.outbound_date.isoformat() if hasattr(item.outbound_date, "isoformat") else str(item.outbound_date),
+                "created_at": item.created_at.isoformat() if hasattr(item.created_at, "isoformat") else str(item.created_at),
+                "lot_qr_code": item.lot_qr_code,
+                "category": item.category,
+                "item_name": item.item_name,
+                "quantity": float(item.quantity or 0),
+                "unit": item.unit,
+                "target_station": item.target_station,
+                "target_station_name": item.target_station_name or item.target_station or "Keluar Umum",
+                "dispatched_by": item.dispatched_by or "PPIC",
+                "notes": item.notes or "-"
+            })
+
+    # 5. Inventory Snapshot & Reconciliation
+    if jenis == "INVENTORY":
+        in_before_q = select(
+            SupplierInbound.item_name,
+            SupplierInbound.category,
+            SupplierInbound.unit,
+            func.sum(SupplierInbound.quantity).label("sum_in")
+        ).where(SupplierInbound.inbound_date < d_from)
+        if cat_filter:
+            in_before_q = in_before_q.where(SupplierInbound.category == cat_filter)
+        in_before_q = in_before_q.group_by(SupplierInbound.item_name, SupplierInbound.category, SupplierInbound.unit)
+        in_before_res = await db.execute(in_before_q)
+        in_before_map = {f"{r[0]}__{r[2]}": float(r[3] or 0) for r in in_before_res.all()}
+
+        out_before_q = select(
+            SupplierOutbound.item_name,
+            SupplierOutbound.category,
+            SupplierOutbound.unit,
+            func.sum(SupplierOutbound.quantity).label("sum_out")
+        ).where(SupplierOutbound.outbound_date < d_from)
+        if cat_filter:
+            out_before_q = out_before_q.where(SupplierOutbound.category == cat_filter)
+        out_before_q = out_before_q.group_by(SupplierOutbound.item_name, SupplierOutbound.category, SupplierOutbound.unit)
+        out_before_res = await db.execute(out_before_q)
+        out_before_map = {f"{r[0]}__{r[2]}": float(r[3] or 0) for r in out_before_res.all()}
+
+        inv_map = {}
+        for it in inbound_items:
+            k = f"{it['item_name']}__{it['unit']}"
+            if k not in inv_map:
+                stok_awal = max(0.0, in_before_map.get(k, 0.0) - out_before_map.get(k, 0.0))
+                inv_map[k] = {
+                    "item_name": it["item_name"],
+                    "category": it["category"],
+                    "unit": it["unit"],
+                    "stok_awal": stok_awal,
+                    "masuk": 0.0,
+                    "keluar": 0.0,
+                    "stok_akhir": stok_awal,
+                    "supplier_names": set()
+                }
+            inv_map[k]["masuk"] += it["quantity"]
+            inv_map[k]["stok_akhir"] += it["quantity"]
+            if it["supplier_name"]:
+                inv_map[k]["supplier_names"].add(it["supplier_name"])
+
+        for ot in outbound_items:
+            k = f"{ot['item_name']}__{ot['unit']}"
+            if k not in inv_map:
+                stok_awal = max(0.0, in_before_map.get(k, 0.0) - out_before_map.get(k, 0.0))
+                inv_map[k] = {
+                    "item_name": ot["item_name"],
+                    "category": ot["category"],
+                    "unit": ot["unit"],
+                    "stok_awal": stok_awal,
+                    "masuk": 0.0,
+                    "keluar": 0.0,
+                    "stok_akhir": max(0.0, stok_awal - ot["quantity"]),
+                    "supplier_names": set()
+                }
+            else:
+                inv_map[k]["keluar"] += ot["quantity"]
+                inv_map[k]["stok_akhir"] = max(0.0, inv_map[k]["stok_akhir"] - ot["quantity"])
+
+        all_keys = set(in_before_map.keys()).union(set(out_before_map.keys()))
+        for k in all_keys:
+            if k not in inv_map:
+                stok_awal = max(0.0, in_before_map.get(k, 0.0) - out_before_map.get(k, 0.0))
+                if stok_awal > 0:
+                    parts = k.split("__")
+                    name = parts[0]
+                    u = parts[1] if len(parts) > 1 else "BAL"
+                    inv_map[k] = {
+                        "item_name": name,
+                        "category": cat_filter or "LAINNYA",
+                        "unit": u,
+                        "stok_awal": stok_awal,
+                        "masuk": 0.0,
+                        "keluar": 0.0,
+                        "stok_akhir": stok_awal,
+                        "supplier_names": set()
+                    }
+
+        for inv in inv_map.values():
+            inventory_items.append({
+                "item_name": inv["item_name"],
+                "category": inv["category"],
+                "unit": inv["unit"],
+                "stok_awal": inv["stok_awal"],
+                "masuk": inv["masuk"],
+                "keluar": inv["keluar"],
+                "stok_akhir": inv["stok_akhir"],
+                "suppliers": ", ".join(sorted(inv["supplier_names"])) if inv["supplier_names"] else "-"
+            })
+        inventory_items.sort(key=lambda x: (x["category"], x["item_name"]))
+
+    # Summary
+    total_in_qty = sum(it["quantity"] for it in inbound_items)
+    total_out_qty = sum(it["quantity"] for it in outbound_items)
+    total_records = len(inbound_items) if jenis == "INBOUND" else len(outbound_items) if jenis == "OUTBOUND" else len(inventory_items) if jenis == "INVENTORY" else (len(inbound_items) + len(outbound_items))
+
+    # Agregasi per Supplier
+    by_supplier = {}
+    for it in inbound_items:
+        s = it["supplier_name"] or "Tanpa Supplier"
+        if s not in by_supplier:
+            by_supplier[s] = {"count": 0, "total_qty": 0.0}
+        by_supplier[s]["count"] += 1
+        by_supplier[s]["total_qty"] += it["quantity"]
+
+    # Agregasi per Barang
+    by_item = {}
+    source_items = inbound_items if jenis == "INBOUND" else outbound_items if jenis == "OUTBOUND" else inbound_items + outbound_items
+    for it in source_items:
+        name = it["item_name"]
+        unit = it["unit"]
+        k = f"{name} ({unit})"
+        if k not in by_item:
+            by_item[k] = {"item_name": name, "unit": unit, "category": it["category"], "total_qty": 0.0, "count": 0}
+        by_item[k]["total_qty"] += it["quantity"]
+        by_item[k]["count"] += 1
+
+    now_wib_str = datetime.now(WIB).strftime("%d/%m/%Y %H:%M:%S WIB")
+
+    return {
+        "status": "success",
+        "jenis_laporan": jenis,
+        "date_from": d_from.isoformat(),
+        "date_to": d_to.isoformat(),
+        "category": cat_filter or "ALL",
+        "supplier": sup_filter,
+        "generated_at": now_wib_str,
+        "total_records": total_records,
+        "summary": {
+            "total_inbound_qty": total_in_qty,
+            "total_outbound_qty": total_out_qty,
+            "inbound_count": len(inbound_items),
+            "outbound_count": len(outbound_items),
+            "inventory_count": len(inventory_items),
+            "by_supplier": by_supplier,
+            "by_item": list(by_item.values())
+        },
+        "inbound_items": inbound_items,
+        "outbound_items": outbound_items,
+        "inventory_items": inventory_items
+    }
+
+
 @router.get("/daily-recap")
 async def get_daily_recap(
     recap_date: Optional[str] = None,
