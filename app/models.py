@@ -220,3 +220,102 @@ class DivisionDailyNote(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+# 10. RBAC: ROLES, PERMISSIONS, USERS & AUDIT LOGS
+
+class Permission(Base):
+    __tablename__ = "permissions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(100), unique=True, nullable=False, index=True)  # e.g. "plan:view", "inbound:export"
+    name = Column(String(100), nullable=False)
+    feature = Column(String(50), nullable=False, index=True)
+    action = Column(String(50), nullable=False)
+    description = Column(String(255), nullable=True)
+
+    roles = relationship("Role", secondary="role_permissions", back_populates="permissions", lazy="selectin")
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+
+    role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+    permission_id = Column(Integer, ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True)
+
+
+class Role(Base):
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(50), unique=True, nullable=False, index=True)
+    description = Column(String(255), nullable=True)
+    is_system = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    permissions = relationship("Permission", secondary="role_permissions", back_populates="roles", lazy="selectin")
+    users = relationship("User", secondary="user_roles", back_populates="roles", lazy="selectin")
+
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    operator_id = Column(String(50), nullable=True)
+    full_name = Column(String(100), nullable=False)
+    division = Column(String(100), nullable=True)
+    default_stage = Column(String(20), default="PROD_1")
+    default_station = Column(String(50), default="MEAT")
+    default_prod2_tab = Column(String(50), default="INBOUND")
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_superadmin = Column(Boolean, default=False, nullable=False)
+    must_change_password = Column(Boolean, default=False, nullable=False)
+    last_login_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    roles = relationship("Role", secondary="user_roles", back_populates="users", lazy="selectin")
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    waktu = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    user_id = Column(Integer, nullable=True)
+    nama_user = Column(String(100), nullable=False)
+    aksi = Column(String(50), nullable=False, index=True)
+    objek_tipe = Column(String(50), nullable=False)
+    objek_id = Column(String(100), nullable=True)
+    ringkasan = Column(Text, nullable=False)
+    data_sebelum = Column(Text, nullable=True)
+    data_sesudah = Column(Text, nullable=True)
+    ip = Column(String(50), nullable=True)
+    user_agent = Column(Text, nullable=True)
+    hasil = Column(String(20), default="SUCCESS", nullable=False)
+
+
+class Product(Base):
+    __tablename__ = "products"
+
+    id = Column(String(50), primary_key=True) # e.g. "FG_MIKA", "FG_VAKUM"
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    spec = Column(String(50), nullable=True) # e.g. "50 Pcs / Mika"
+    price = Column(Integer, nullable=True) # integer rupiah, e.g. 45000
+    image_url = Column(String(255), nullable=True)
+    thumbnail_url = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+

@@ -396,15 +396,24 @@ class QuickSwitchRequest(BaseModel):
     username: str = Field(..., example="opr_bumbu")
 
 class AuthUserResponse(BaseModel):
+    id: Optional[int] = None
     username: str
-    operator_id: str
+    operator_id: Optional[str] = None
     full_name: str
     role: str
-    division: str
+    division: Optional[str] = None
     default_stage: str = "PROD_1"
     default_station: str = "MEAT"
     default_prod2_tab: str = "INBOUND"
     created_at: Optional[str] = None
+    is_active: Optional[bool] = True
+    is_superadmin: Optional[bool] = False
+    must_change_password: Optional[bool] = False
+    permissions: Optional[List[str]] = []
+    roles: Optional[List[str]] = []
+
+    class Config:
+        from_attributes = True
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -589,6 +598,122 @@ class AddProductionBatchRequest(BaseModel):
     confirmed_delta_bumbu: Optional[int] = None
     confirmed_delta_kulit: Optional[int] = None
     confirmed_delta_saos: Optional[int] = None
+
+
+# --- Schemas RBAC, Super Admin & Audit Logs ---
+
+class PermissionResponse(BaseModel):
+    id: int
+    code: str
+    name: str
+    feature: str
+    action: str
+    description: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RoleResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    is_system: bool
+    created_at: datetime
+    permission_count: int = 0
+    permissions: List[str] = []
+    user_count: int = 0
+
+    class Config:
+        from_attributes = True
+
+
+class RoleCreateRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=50, example="Supervisor Line 1")
+    description: Optional[str] = Field(default=None, example="Mengawasi operasional harian lini produksi 1")
+    permissions: List[str] = Field(default_factory=list, example=["meat:view", "meat:operate"])
+
+
+class RoleUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=50)
+    description: Optional[str] = None
+    permissions: Optional[List[str]] = None
+
+
+class UserAdminResponse(BaseModel):
+    id: int
+    username: str
+    operator_id: Optional[str] = None
+    full_name: str
+    division: Optional[str] = None
+    default_stage: str = "PROD_1"
+    default_station: str = "MEAT"
+    default_prod2_tab: str = "INBOUND"
+    is_active: bool
+    is_superadmin: bool
+    must_change_password: bool
+    last_login_at: Optional[datetime] = None
+    created_at: datetime
+    roles: List[str] = []
+
+    class Config:
+        from_attributes = True
+
+
+class UserCreateRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50, example="operator_baru")
+    password: str = Field(..., min_length=6, example="Password#2026")
+    full_name: str = Field(..., min_length=2, max_length=100, example="Ahmad Dahlan")
+    operator_id: Optional[str] = Field(default=None, example="OPR-09")
+    division: Optional[str] = Field(default=None, example="Divisi Daging (Giling & Mixer)")
+    default_stage: Optional[str] = Field(default="PROD_1")
+    default_station: Optional[str] = Field(default="MEAT")
+    default_prod2_tab: Optional[str] = Field(default="INBOUND")
+    is_active: bool = True
+    is_superadmin: bool = False
+    must_change_password: bool = True
+    role_ids: List[int] = Field(default_factory=list, example=[4])
+
+
+class UserUpdateRequest(BaseModel):
+    full_name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    operator_id: Optional[str] = None
+    division: Optional[str] = None
+    default_stage: Optional[str] = None
+    default_station: Optional[str] = None
+    default_prod2_tab: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_superadmin: Optional[bool] = None
+    role_ids: Optional[List[int]] = None
+
+
+class UserStatusUpdateRequest(BaseModel):
+    is_active: bool
+
+
+class UserResetPasswordRequest(BaseModel):
+    new_password: str = Field(..., min_length=6, example="Reset#2026")
+    must_change_password: bool = True
+
+
+class AuditLogResponse(BaseModel):
+    id: int
+    waktu: datetime
+    user_id: Optional[int] = None
+    nama_user: str
+    aksi: str
+    objek_tipe: str
+    objek_id: Optional[str] = None
+    ringkasan: str
+    data_sebelum: Optional[str] = None
+    data_sesudah: Optional[str] = None
+    ip: Optional[str] = None
+    user_agent: Optional[str] = None
+    hasil: str
+
+    class Config:
+        from_attributes = True
+
 
 
 

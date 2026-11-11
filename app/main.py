@@ -1,10 +1,12 @@
 import os
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import production1, production2, auth, scan
+from fastapi.staticfiles import StaticFiles
+from .routers import production1, production2, auth, scan, admin, products
 from .auth import get_current_user
 from .database import engine, Base, AsyncSessionLocal
-from .models import ProductionPlan, ScanSetting
+from .models import ProductionPlan, ScanSetting, Product
+from .rbac_seed import seed_rbac_data
 from datetime import date, datetime
 from sqlalchemy import select
 
@@ -31,11 +33,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register Router (Auth terbuka untuk login, Production1 & 2 wajib terotentikasi)
+# Register Router (Auth terbuka untuk login, Production1 & 2 & Scan & Admin & Products wajib terotentikasi)
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(scan.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(production1.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(production2.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(admin.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(products.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+
+# Static Files untuk upload foto katalog produk
+os.makedirs("uploads/products", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 @app.on_event("startup")
@@ -146,6 +154,46 @@ async def on_startup():
             ))
             await session.commit()
             print("[STARTUP] Auto-seed ScanSetting GLOBAL='1X'.")
+
+        # 4. Inisialisasi & Migrasi RBAC (Roles, Permissions, Super Admin, & 16 Legacy Accounts)
+        try:
+            rbac_report = await seed_rbac_data(session)
+            print(f"[STARTUP] Inisialisasi & Migrasi RBAC Selesai: {rbac_report}")
+        except Exception as e:
+            print(f"[STARTUP] Peringatan: Gagal seeding RBAC: {e}")
+
+        # 5. Auto-seed Produk Standar (Dimsum Mika & Dimsum Vakum) jika tabel products kosong
+        try:
+            prod_cnt_res = await session.execute(select(Product))
+            existing_prods = prod_cnt_res.scalars().all()
+            if not existing_prods:
+                default_products = [
+                    Product(
+                        id="FG_MIKA",
+                        name="Dimsum Mika",
+                        description="Dimsum kukus isi 50 pcs kemasan mika menggunakan kulit 9 cm.",
+                        spec="50 Pcs / Mika",
+                        price=None,
+                        image_url=None,
+                        thumbnail_url=None,
+                        is_active=False
+                    ),
+                    Product(
+                        id="FG_VAKUM",
+                        name="Dimsum Vakum",
+                        description="Dimsum beku isi 25 pcs kemasan vakum menggunakan kulit 7 cm.",
+                        spec="25 Pcs / Pack",
+                        price=None,
+                        image_url=None,
+                        thumbnail_url=None,
+                        is_active=False
+                    )
+                ]
+                session.add_all(default_products)
+                await session.commit()
+                print("[STARTUP] Auto-seed 2 produk katalog default (FG_MIKA, FG_VAKUM).")
+        except Exception as e:
+            print(f"[STARTUP] Seeding default products notice: {e}")
 
 
 

@@ -23,6 +23,8 @@ from ..services.scan_engine import (
 )
 from ..database import get_db
 from ..auth import require_role, require_division, get_current_user, is_global_supervisor, require_ppic
+from ..rbac import require_permission
+from ..audit_logger import log_audit_event
 from ..models import (
     LotTracking,
     CustodyTransferLog,
@@ -1741,6 +1743,16 @@ async def dev_wipe_database(
 
         await db.commit()
 
+        await log_audit_event(
+            db=db,
+            aksi="DEV_WIPE",
+            objek_tipe="DATABASE",
+            ringkasan="Wipe database operasional transaksi dieksekusi",
+            user_id=current_user.get("user_id"),
+            nama_user=current_user.get("sub") or current_user.get("username"),
+            hasil="SUCCESS"
+        )
+
         return {
             "status": "success",
             "message": "Database berhasil di-wipe dan direset ke kondisi awal.",
@@ -3321,7 +3333,7 @@ async def get_ppic_export_report(
 
     now_wib_str = datetime.now(WIB).strftime("%d/%m/%Y %H:%M:%S WIB")
 
-    return {
+    result_payload = {
         "status": "success",
         "jenis_laporan": jenis,
         "date_from": d_from.isoformat(),
@@ -3343,6 +3355,18 @@ async def get_ppic_export_report(
         "outbound_items": outbound_items,
         "inventory_items": inventory_items
     }
+
+    await log_audit_event(
+        db=db,
+        aksi="EXPORT",
+        objek_tipe="REPORT",
+        ringkasan=f"Ekspor laporan PPIC '{jenis}' rentang {d_from} s/d {d_to} (total {total_records} data)",
+        user_id=current_user.get("user_id"),
+        nama_user=current_user.get("sub") or current_user.get("username"),
+        hasil="SUCCESS"
+    )
+
+    return result_payload
 
 
 @router.get("/daily-recap")

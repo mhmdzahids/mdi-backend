@@ -309,12 +309,16 @@ def b64url_decode(s: str) -> bytes:
 
 def create_token(user_data: Dict[str, Any], expires_in_seconds: int = 86400 * 30) -> str:
     payload = {
+        "user_id": user_data.get("id"),
         "sub": user_data["username"],
-        "operator_id": user_data["operator_id"],
-        "full_name": user_data["full_name"],
-        "role": user_data["role"],
-        "division": user_data["division"],
-        "created_at": user_data.get("created_at"),
+        "operator_id": user_data.get("operator_id"),
+        "full_name": user_data.get("full_name"),
+        "role": user_data.get("role", "OPERATOR"),
+        "division": user_data.get("division"),
+        "is_superadmin": bool(user_data.get("is_superadmin", False)),
+        "must_change_password": bool(user_data.get("must_change_password", False)),
+        "is_active": bool(user_data.get("is_active", True)),
+        "created_at": str(user_data.get("created_at")) if user_data.get("created_at") else None,
         "exp": int(time.time()) + expires_in_seconds
     }
     header_json = json.dumps({"alg": "HS256", "typ": "JWT"}).encode("utf-8")
@@ -396,13 +400,16 @@ def require_role(allowed_roles: list):
 
 
 def is_global_supervisor(user: Dict[str, Any]) -> bool:
+    if user.get("is_superadmin") is True:
+        return True
     sub = (user.get("sub") or user.get("username") or "").lower()
     op_id = (user.get("operator_id") or "").upper()
     div = (user.get("division") or "").upper()
     return (
-        sub in ["supervisor", "ppic_ayu", "ayu"]
+        sub in ["supervisor", "ppic_ayu", "ayu", "superadmin"]
         or "YOSI" in op_id
         or "AYU" in op_id
+        or "SUPER" in op_id
         or "PPIC" in div
         or "SUPERVISOR" in div
     )
