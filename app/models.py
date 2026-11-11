@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Numeric, Boolean, Date, DateTime, Integer, BigInteger, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
@@ -308,9 +309,14 @@ class Product(Base):
 
     id = Column(String(50), primary_key=True) # e.g. "FG_MIKA", "FG_VAKUM"
     name = Column(String(100), nullable=False)
+    sku = Column(String(100), nullable=True) # e.g. "DIMSUM-MINI-PAX-25"
     description = Column(Text, nullable=True)
     spec = Column(String(50), nullable=True) # e.g. "50 Pcs / Mika"
-    price = Column(Integer, nullable=True) # integer rupiah, e.g. 45000
+    price = Column(Integer, nullable=True) # integer rupiah, e.g. 45000 (harga jual final)
+    original_price = Column(Numeric(12, 2), nullable=True) # harga normal (harga coret)
+    is_discount = Column(Boolean, default=False, nullable=False)
+    discount_percent = Column(Integer, default=0, nullable=False) # 1-100%
+    stock_online = Column(Integer, default=0, nullable=False) # alokasi stok untuk customer website
     image_url = Column(String(255), nullable=True)
     thumbnail_url = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -385,6 +391,40 @@ class POSApiKey(Base):
     created_by = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_used_at = Column(DateTime, nullable=True)
+
+
+# ==========================================
+# PROMOTIONS & MARKETING MODELS (VOUCHER & BANNER)
+# ==========================================
+
+class Voucher(Base):
+    __tablename__ = "vouchers"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    code = Column(String(50), unique=True, nullable=False, index=True)
+    discount_type = Column(String(20), default="fixed", nullable=False) # 'fixed' or 'percent'
+    discount_value = Column(Numeric(12, 2), nullable=False)
+    min_spend = Column(Numeric(12, 2), default=0.00, nullable=False)
+    max_discount = Column(Numeric(12, 2), nullable=True)
+    start_date = Column(DateTime, nullable=True)
+    end_date = Column(DateTime, nullable=True)
+    usage_limit = Column(Integer, nullable=True)
+    used_count = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_public = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class Banner(Base):
+    __tablename__ = "banners"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = Column(String(100), nullable=True)
+    image_url = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
 
 
 

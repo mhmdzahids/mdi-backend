@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from .routers import production1, production2, auth, scan, admin, products, pos
+from .routers import production1, production2, auth, scan, admin, products, pos, public_buyer, promotions
 from .auth import get_current_user
 from .database import engine, Base, AsyncSessionLocal
 from .models import ProductionPlan, ScanSetting, Product
@@ -41,9 +41,12 @@ app.include_router(production2.router, prefix="/api/v1", dependencies=[Depends(g
 app.include_router(admin.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(products.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(pos.router, prefix="/api/v1")
+app.include_router(public_buyer.router, prefix="/api/v1")
+app.include_router(promotions.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 
-# Static Files untuk upload foto katalog produk
+# Static Files untuk upload foto katalog produk & banner promosi
 os.makedirs("uploads/products", exist_ok=True)
+os.makedirs("uploads/banners", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 

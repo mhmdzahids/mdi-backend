@@ -31,9 +31,15 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 class ProductResponse(BaseModel):
     id: str
     name: str
+    sku: Optional[str] = None
     description: Optional[str] = None
     spec: Optional[str] = None
     price: Optional[int] = None
+    original_price: Optional[float] = None
+    is_discount: bool = False
+    discount_percent: int = 0
+    stock_online: int = 0
+    saved_amount: Optional[float] = None
     image_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
     is_active: bool
@@ -47,18 +53,59 @@ class ProductResponse(BaseModel):
 class ProductCreate(BaseModel):
     id: str
     name: str
+    sku: Optional[str] = None
     description: Optional[str] = None
     spec: Optional[str] = None
     price: Optional[int] = None
+    original_price: Optional[float] = None
+    is_discount: bool = False
+    discount_percent: int = 0
+    stock_online: int = 0
     is_active: bool = False
 
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
+    sku: Optional[str] = None
     description: Optional[str] = None
     spec: Optional[str] = None
     price: Optional[int] = None
+    original_price: Optional[float] = None
+    is_discount: Optional[bool] = None
+    discount_percent: Optional[int] = None
+    stock_online: Optional[int] = None
     is_active: Optional[bool] = None
+
+
+class ProductDiscountUpdate(BaseModel):
+    is_discount: bool
+    original_price: float
+    discount_percent: int
+    stock_online: Optional[int] = 0
+
+
+def to_product_response(p: Product, can_view_price: bool) -> ProductResponse:
+    orig = float(p.original_price) if p.original_price is not None else (float(p.price) if p.price else None)
+    pr = p.price if can_view_price else None
+    saved = round(float(orig - pr), 2) if (can_view_price and orig and pr and p.is_discount and orig > pr) else 0.0
+    return ProductResponse(
+        id=p.id,
+        name=p.name,
+        sku=p.sku or p.id,
+        description=p.description,
+        spec=p.spec,
+        price=pr,
+        original_price=orig if can_view_price else None,
+        is_discount=bool(p.is_discount),
+        discount_percent=int(p.discount_percent or 0),
+        stock_online=int(p.stock_online or 0),
+        saved_amount=saved if can_view_price else None,
+        image_url=p.image_url,
+        thumbnail_url=p.thumbnail_url,
+        is_active=p.is_active,
+        created_at=p.created_at,
+        updated_at=p.updated_at
+    )
 
 
 async def user_can_view_price(current_user: Dict[str, Any], db: AsyncSession) -> bool:
@@ -106,22 +153,7 @@ async def list_products(
     res = await db.execute(select(Product).order_by(Product.id.asc()))
     products = res.scalars().all()
 
-    result = []
-    for p in products:
-        p_dict = {
-            "id": p.id,
-            "name": p.name,
-            "description": p.description,
-            "spec": p.spec,
-            "price": p.price if can_view else None,
-            "image_url": p.image_url,
-            "thumbnail_url": p.thumbnail_url,
-            "is_active": p.is_active,
-            "created_at": p.created_at,
-            "updated_at": p.updated_at
-        }
-        result.append(ProductResponse(**p_dict))
-    return result
+    return [to_product_response(p, can_view) for p in products]
 
 
 @router.get("/{product_id}", response_model=ProductResponse)
@@ -137,18 +169,7 @@ async def get_product_detail(
         raise HTTPException(status_code=404, detail="Produk tidak ditemukan.")
 
     can_view = await user_can_view_price(current_user, db)
-    return ProductResponse(
-        id=product.id,
-        name=product.name,
-        description=product.description,
-        spec=product.spec,
-        price=product.price if can_view else None,
-        image_url=product.image_url,
-        thumbnail_url=product.thumbnail_url,
-        is_active=product.is_active,
-        created_at=product.created_at,
-        updated_at=product.updated_at
-    )
+    return to_product_response(product, can_view)
 
 
 @router.post("", response_model=ProductResponse)
@@ -169,7 +190,19 @@ async def create_product(
         raise HTTPException(status_code=400, detail=f"Produk dengan kode '{pid}' sudah ada.")
 
     can_edit = await user_can_edit_price(current_user, db)
-    final_price = payload.price if can_edit else None
+    orig_price = payload.original_price if can_edit else None
+    if orig_price is None and payload.price is not None:
+        orig_price = float(payload.price)
+
+    is_disc = payload.is_discount and can_edit
+    disc_pct = payload.discount_percent if (is_disc and can_edit) else 0
+
+    if is_disc and disc_pct > 0 and orig_price:
+        final_price = round(orig_price * (1 - (disc_pct / 100)))
+    else:
+        final_price = round(orig_price) if orig_price else (payload.price if can_edit else None)
+        is_disc = False
+        disc_pct = 0
 
     # Produk tanpa harga tidak bisa diaktifkan
     is_act = payload.is_active
@@ -179,9 +212,14 @@ async def create_product(
     new_prod = Product(
         id=pid,
         name=payload.name.strip(),
+        sku=payload.sku.strip() if payload.sku else pid,
         description=payload.description.strip() if payload.description else None,
         spec=payload.spec.strip() if payload.spec else None,
         price=final_price,
+        original_price=orig_price,
+        is_discount=is_disc,
+        discount_percent=disc_pct,
+        stock_online=max(0, payload.stock_online or 0),
         is_active=is_act
     )
     db.add(new_prod)
@@ -200,18 +238,7 @@ async def create_product(
     )
 
     can_view = await user_can_view_price(current_user, db)
-    return ProductResponse(
-        id=new_prod.id,
-        name=new_prod.name,
-        description=new_prod.description,
-        spec=new_prod.spec,
-        price=new_prod.price if can_view else None,
-        image_url=new_prod.image_url,
-        thumbnail_url=new_prod.thumbnail_url,
-        is_active=new_prod.is_active,
-        created_at=new_prod.created_at,
-        updated_at=new_prod.updated_at
-    )
+    return to_product_response(new_prod, can_view)
 
 
 @router.put("/{product_id}", response_model=ProductResponse)
@@ -237,32 +264,54 @@ async def update_product(
     user_id = current_user.get("user_id")
     actor_name = current_user.get("full_name") or current_user.get("username") or "SYSTEM"
 
-    # 1. Periksa perubahan harga
+    # 1. Periksa perubahan harga / diskon
     price_changed = False
     old_price = product.price
     target_price = product.price
 
-    if payload.price is not None or "price" in payload.model_fields_set:
-        if payload.price != product.price:
-            can_edit_p = await user_can_edit_price(current_user, db)
-            if not can_edit_p:
-                await log_audit_event(
-                    db=db,
-                    aksi="ACCESS_DENIED",
-                    objek_tipe="PRODUCT",
-                    objek_id=product_id,
-                    ringkasan=f"Upaya ubah harga produk '{product.name}' ditolak (tanpa izin Ubah Harga)",
-                    user_id=user_id,
-                    nama_user=actor_name,
-                    request=request,
-                    hasil="DENIED"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Akses ditolak: Anda tidak memiliki izin 'freezer_sales:edit_price' untuk mengubah harga."
-                )
+    # Jika payload menyertakan perubahan diskon atau harga
+    has_disc_or_price_update = any(k in payload.model_fields_set for k in ["price", "original_price", "is_discount", "discount_percent"])
+
+    if has_disc_or_price_update:
+        can_edit_p = await user_can_edit_price(current_user, db)
+        if not can_edit_p:
+            await log_audit_event(
+                db=db,
+                aksi="ACCESS_DENIED",
+                objek_tipe="PRODUCT",
+                objek_id=product_id,
+                ringkasan=f"Upaya ubah harga/diskon produk '{product.name}' ditolak (tanpa izin Ubah Harga)",
+                user_id=user_id,
+                nama_user=actor_name,
+                request=request,
+                hasil="DENIED"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Akses ditolak: Anda tidak memiliki izin 'freezer_sales:edit_price' untuk mengubah harga/diskon."
+            )
+
+        orig_p = payload.original_price if payload.original_price is not None else (float(product.original_price) if product.original_price is not None else float(product.price or 0))
+        is_disc = payload.is_discount if payload.is_discount is not None else product.is_discount
+        disc_pct = payload.discount_percent if payload.discount_percent is not None else product.discount_percent
+
+        if is_disc and disc_pct > 0 and orig_p > 0:
+            target_price = round(orig_p * (1 - (disc_pct / 100)))
+            product.is_discount = True
+            product.discount_percent = disc_pct
+        else:
+            if payload.price is not None:
+                target_price = payload.price
+                orig_p = float(payload.price)
+            else:
+                target_price = round(orig_p)
+            product.is_discount = False
+            product.discount_percent = 0
+
+        product.original_price = orig_p
+        if target_price != product.price:
             price_changed = True
-            target_price = payload.price
+            product.price = target_price
 
     # 2. Periksa status aktif
     target_active = product.is_active if payload.is_active is None else payload.is_active
@@ -276,6 +325,14 @@ async def update_product(
     other_changed = False
     if payload.name is not None and payload.name.strip() != product.name:
         product.name = payload.name.strip()
+        other_changed = True
+
+    if payload.sku is not None and payload.sku.strip() != (product.sku or ""):
+        product.sku = payload.sku.strip()
+        other_changed = True
+
+    if payload.stock_online is not None and payload.stock_online != product.stock_online:
+        product.stock_online = max(0, payload.stock_online)
         other_changed = True
 
     if "description" in payload.model_fields_set:
@@ -294,9 +351,8 @@ async def update_product(
         product.is_active = target_active
         other_changed = True
 
-    # 4. Terapkan harga jika berubah
+    # 4. Terapkan audit log
     if price_changed:
-        product.price = target_price
         await log_audit_event(
             db=db,
             aksi="Ubah harga",
@@ -304,7 +360,7 @@ async def update_product(
             objek_id=product.id,
             ringkasan=f"Ubah harga {product.name} dari {old_price or 'Belum ada'} ke {target_price}",
             data_sebelum=json.dumps({"price": old_price}),
-            data_sesudah=json.dumps({"price": target_price}),
+            data_sesudah=json.dumps({"price": target_price, "original_price": float(product.original_price or target_price), "discount_percent": product.discount_percent}),
             user_id=user_id,
             nama_user=actor_name,
             request=request
@@ -327,18 +383,82 @@ async def update_product(
     await db.refresh(product)
 
     can_view = await user_can_view_price(current_user, db)
-    return ProductResponse(
-        id=product.id,
-        name=product.name,
-        description=product.description,
-        spec=product.spec,
-        price=product.price if can_view else None,
-        image_url=product.image_url,
-        thumbnail_url=product.thumbnail_url,
-        is_active=product.is_active,
-        created_at=product.created_at,
-        updated_at=product.updated_at
+    return to_product_response(product, can_view)
+
+
+@router.put("/{product_id}/discount", response_model=ProductResponse)
+async def update_product_discount(
+    product_id: str,
+    payload: ProductDiscountUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_permission("freezer_sales:update"))
+):
+    """
+    Atur diskon dan harga coret produk (TUGAS 1).
+    Rumus Bisnis:
+    - Jika is_discount = True dan discount_percent > 0:
+        price = round(original_price * (1 - (discount_percent / 100)))
+    - Jika is_discount = False:
+        price = round(original_price)
+        discount_percent = 0
+    - Nominal hemat: original_price - price
+    """
+    can_edit_p = await user_can_edit_price(current_user, db)
+    if not can_edit_p:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak: Anda tidak memiliki izin 'freezer_sales:edit_price' untuk mengatur diskon."
+        )
+
+    res = await db.execute(select(Product).where(Product.id == product_id))
+    product = res.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produk tidak ditemukan.")
+
+    user_id = current_user.get("user_id")
+    actor_name = current_user.get("full_name") or current_user.get("username") or "SYSTEM"
+
+    orig_price = float(payload.original_price)
+    if orig_price <= 0:
+        raise HTTPException(status_code=400, detail="Harga normal (original_price) harus lebih dari 0.")
+
+    if payload.is_discount and payload.discount_percent > 0:
+        pct = min(100, max(1, payload.discount_percent))
+        final_price = round(orig_price * (1 - (pct / 100)))
+        is_disc = True
+    else:
+        final_price = round(orig_price)
+        pct = 0
+        is_disc = False
+
+    old_price = product.price
+    product.original_price = orig_price
+    product.is_discount = is_disc
+    product.discount_percent = pct
+    product.price = final_price
+    if payload.stock_online is not None:
+        product.stock_online = max(0, payload.stock_online)
+
+    product.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(product)
+
+    await log_audit_event(
+        db=db,
+        aksi="Ubah harga",
+        objek_tipe="PRODUCT",
+        objek_id=product.id,
+        ringkasan=f"Atur diskon {product.name}: {pct}% (Harga Coret: {orig_price} -> Harga Jual: {final_price})",
+        data_sebelum=json.dumps({"price": old_price}),
+        data_sesudah=json.dumps({"original_price": orig_price, "price": final_price, "discount_percent": pct, "is_discount": is_disc}),
+        user_id=user_id,
+        nama_user=actor_name,
+        request=request
     )
+
+    can_view = await user_can_view_price(current_user, db)
+    return to_product_response(product, can_view)
 
 
 @router.post("/{product_id}/image", response_model=ProductResponse)
@@ -454,18 +574,7 @@ async def upload_product_image(
     )
 
     can_view = await user_can_view_price(current_user, db)
-    return ProductResponse(
-        id=product.id,
-        name=product.name,
-        description=product.description,
-        spec=product.spec,
-        price=product.price if can_view else None,
-        image_url=product.image_url,
-        thumbnail_url=product.thumbnail_url,
-        is_active=product.is_active,
-        created_at=product.created_at,
-        updated_at=product.updated_at
-    )
+    return to_product_response(product, can_view)
 
 
 @router.delete("/{product_id}/image", response_model=ProductResponse)
@@ -504,15 +613,4 @@ async def delete_product_image(
     )
 
     can_view = await user_can_view_price(current_user, db)
-    return ProductResponse(
-        id=product.id,
-        name=product.name,
-        description=product.description,
-        spec=product.spec,
-        price=product.price if can_view else None,
-        image_url=product.image_url,
-        thumbnail_url=product.thumbnail_url,
-        is_active=product.is_active,
-        created_at=product.created_at,
-        updated_at=product.updated_at
-    )
+    return to_product_response(product, can_view)
