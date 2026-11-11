@@ -59,7 +59,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Divisi Daging (Giling & Mixer)",
         "default_stage": "PROD_1",
         "default_station": "MEAT",
-        "default_prod2_tab": "INBOUND"
+        "default_prod2_tab": "INBOUND",
+        "created_at": "2024-02-15T08:00:00Z"
     },
     "pic_daging": {
         "username": "pic_daging",
@@ -70,7 +71,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Divisi Daging (Giling & Mixer)",
         "default_stage": "PROD_1",
         "default_station": "MEAT",
-        "default_prod2_tab": "INBOUND"
+        "default_prod2_tab": "INBOUND",
+        "created_at": "2023-08-01T08:00:00Z"
     },
 
     # 2. Divisi Bumbu Racik
@@ -83,7 +85,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Divisi Bumbu Racik",
         "default_stage": "PROD_1",
         "default_station": "SEASONING",
-        "default_prod2_tab": "INBOUND"
+        "default_prod2_tab": "INBOUND",
+        "created_at": "2024-03-10T08:00:00Z"
     },
     "pic_bumbu": {
         "username": "pic_bumbu",
@@ -94,7 +97,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Divisi Bumbu Racik",
         "default_stage": "PROD_1",
         "default_station": "SEASONING",
-        "default_prod2_tab": "INBOUND"
+        "default_prod2_tab": "INBOUND",
+        "created_at": "2023-09-01T08:00:00Z"
     },
 
     # 3. Divisi Kulit Pangsit
@@ -107,7 +111,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Divisi Kulit Pangsit",
         "default_stage": "PROD_1",
         "default_station": "WRAPPER",
-        "default_prod2_tab": "INBOUND"
+        "default_prod2_tab": "INBOUND",
+        "created_at": "2024-04-05T08:00:00Z"
     },
     "pic_kulit": {
         "username": "pic_kulit",
@@ -118,7 +123,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Divisi Kulit Pangsit",
         "default_stage": "PROD_1",
         "default_station": "WRAPPER",
-        "default_prod2_tab": "INBOUND"
+        "default_prod2_tab": "INBOUND",
+        "created_at": "2023-11-20T08:00:00Z"
     },
 
     # 4. Divisi Saos Dimsum
@@ -131,7 +137,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Divisi Saos Dimsum",
         "default_stage": "PROD_1",
         "default_station": "SAUCE",
-        "default_prod2_tab": "INBOUND"
+        "default_prod2_tab": "INBOUND",
+        "created_at": "2024-05-12T08:00:00Z"
     },
     "pic_saos": {
         "username": "pic_saos",
@@ -142,7 +149,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Divisi Saos Dimsum",
         "default_stage": "PROD_1",
         "default_station": "SAUCE",
-        "default_prod2_tab": "INBOUND"
+        "default_prod2_tab": "INBOUND",
+        "created_at": "2024-01-08T08:00:00Z"
     },
 
     # 5. Produksi 2: Cetak & Assembly
@@ -155,7 +163,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Produksi 2: Cetak & Assembly",
         "default_stage": "PROD_2",
         "default_station": "ASSEMBLY",
-        "default_prod2_tab": "INBOUND"
+        "default_prod2_tab": "INBOUND",
+        "created_at": "2024-06-01T08:00:00Z"
     },
     "pic_cetak": {
         "username": "pic_cetak",
@@ -166,7 +175,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Produksi 2: Cetak & Assembly",
         "default_stage": "PROD_2",
         "default_station": "ASSEMBLY",
-        "default_prod2_tab": "INBOUND"
+        "default_prod2_tab": "INBOUND",
+        "created_at": "2023-10-15T08:00:00Z"
     },
 
     # 6. Produksi 2: Packing & Checker
@@ -179,7 +189,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Produksi 2: Packing & Checker",
         "default_stage": "PROD_2",
         "default_station": "PACKING",
-        "default_prod2_tab": "PACKING"
+        "default_prod2_tab": "PACKING",
+        "created_at": "2024-07-15T08:00:00Z"
     },
     "pic_packing": {
         "username": "pic_packing",
@@ -190,7 +201,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Produksi 2: Packing & Checker",
         "default_stage": "PROD_2",
         "default_station": "PACKING",
-        "default_prod2_tab": "PACKING"
+        "default_prod2_tab": "PACKING",
+        "created_at": "2023-12-01T08:00:00Z"
     },
 
     # 7. Gudang Freezer & Sales (POS)
@@ -203,7 +215,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Gudang Freezer & Sales (POS)",
         "default_stage": "PROD_2",
         "default_station": "SALES",
-        "default_prod2_tab": "SALES"
+        "default_prod2_tab": "SALES",
+        "created_at": "2024-08-20T08:00:00Z"
     },
     "pic_gudang": {
         "username": "pic_gudang",
@@ -214,7 +227,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Gudang Freezer & Sales (POS)",
         "default_stage": "PROD_2",
         "default_station": "SALES",
-        "default_prod2_tab": "SALES"
+        "default_prod2_tab": "SALES",
+        "created_at": "2024-01-15T08:00:00Z"
     },
 
     # 8. Supervisor Global & PPIC
@@ -227,7 +241,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "PPIC / Administrasi Produksi",
         "default_stage": "PROD_1",
         "default_station": "PLAN",
-        "default_prod2_tab": "PRODUCTS"
+        "default_prod2_tab": "PRODUCTS",
+        "created_at": "2023-05-15T08:00:00Z"
     },
     "supervisor": {
         "username": "supervisor",
@@ -238,7 +253,8 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "division": "Supervisor & PPIC",
         "default_stage": "PROD_1",
         "default_station": "PLAN",
-        "default_prod2_tab": "PRODUCTS"
+        "default_prod2_tab": "PRODUCTS",
+        "created_at": "2023-01-10T08:00:00Z"
     }
 }
 
@@ -298,6 +314,7 @@ def create_token(user_data: Dict[str, Any], expires_in_seconds: int = 86400 * 30
         "full_name": user_data["full_name"],
         "role": user_data["role"],
         "division": user_data["division"],
+        "created_at": user_data.get("created_at"),
         "exp": int(time.time()) + expires_in_seconds
     }
     header_json = json.dumps({"alg": "HS256", "typ": "JWT"}).encode("utf-8")

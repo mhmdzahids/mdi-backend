@@ -112,6 +112,20 @@ async def quick_switch_account(payload: QuickSwitchRequest):
 @router.get("/me", response_model=Dict[str, Any])
 async def get_my_profile(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Ambil informasi profil pengguna yang sedang login."""
+    username = current_user.get("sub") or current_user.get("username")
+    user = ACCOUNTS.get(username) if username else None
+    if user:
+        return {
+            "username": user["username"],
+            "operator_id": user["operator_id"],
+            "full_name": user["full_name"],
+            "role": user["role"],
+            "division": user["division"],
+            "default_stage": user.get("default_stage", "PROD_1"),
+            "default_station": user.get("default_station", "MEAT"),
+            "default_prod2_tab": user.get("default_prod2_tab", "INBOUND"),
+            "created_at": user.get("created_at")
+        }
     return current_user
 
 
@@ -131,6 +145,7 @@ async def list_available_accounts():
             "division": acc["division"],
             "default_stage": acc.get("default_stage", "PROD_1"),
             "default_station": acc.get("default_station", "MEAT"),
-            "default_prod2_tab": acc.get("default_prod2_tab", "INBOUND")
+            "default_prod2_tab": acc.get("default_prod2_tab", "INBOUND"),
+            "created_at": acc.get("created_at")
         })
     return accounts_clean

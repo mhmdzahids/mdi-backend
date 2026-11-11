@@ -404,6 +404,7 @@ class AuthUserResponse(BaseModel):
     default_stage: str = "PROD_1"
     default_station: str = "MEAT"
     default_prod2_tab: str = "INBOUND"
+    created_at: Optional[str] = None
 
 class TokenResponse(BaseModel):
     access_token: str
