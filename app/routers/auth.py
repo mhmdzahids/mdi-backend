@@ -1,8 +1,8 @@
 import os
 from typing import List, Dict, Any
 from fastapi import APIRouter, HTTPException, status, Depends
-from ..auth import ACCOUNTS, create_token, get_current_user
-from ..schemas import LoginRequest, QuickSwitchRequest, TokenResponse, AuthUserResponse
+from ..auth import ACCOUNTS, create_token, get_current_user, verify_password, hash_password, update_account_password
+from ..schemas import LoginRequest, QuickSwitchRequest, TokenResponse, AuthUserResponse, ChangePasswordRequest
 
 router = APIRouter(prefix="/auth", tags=["Autentikasi & Akun Pegawai"])
 
@@ -11,7 +11,7 @@ router = APIRouter(prefix="/auth", tags=["Autentikasi & Akun Pegawai"])
 async def login(payload: LoginRequest):
     """Login dengan username dan password."""
     user = ACCOUNTS.get(payload.username)
-    if not user or user["password"] != payload.password:
+    if not user or not verify_password(payload.password, user["password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Username atau password salah."
@@ -22,6 +22,63 @@ async def login(payload: LoginRequest):
         "access_token": token,
         "token_type": "bearer",
         "user": user
+    }
+
+
+@router.post("/change-password")
+async def change_password(
+    payload: ChangePasswordRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Ubah password akun pengguna yang sedang login.
+    Memerlukan validasi password saat ini, konfirmasi password baru,
+    serta hashing standar industri (bcrypt).
+    """
+    username = current_user.get("sub") or current_user.get("username")
+    if not username or username not in ACCOUNTS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Akun pengguna tidak ditemukan."
+        )
+
+    user = ACCOUNTS[username]
+
+    # 1. Verifikasi kecocokan password saat ini
+    if not verify_password(payload.current_password, user["password"]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password saat ini salah."
+        )
+
+    # 2. Verifikasi konfirmasi kecocokan password baru
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Konfirmasi password baru tidak cocok."
+        )
+
+    # 3. Validasi panjang password baru
+    if len(payload.new_password.strip()) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password baru minimal 6 karakter."
+        )
+
+    # 4. Validasi password baru tidak boleh sama persis dengan password saat ini
+    if verify_password(payload.new_password, user["password"]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password baru tidak boleh sama dengan password saat ini."
+        )
+
+    # 5. Hash password baru dengan bcrypt dan simpan
+    hashed = hash_password(payload.new_password)
+    update_account_password(username, hashed)
+
+    return {
+        "status": "success",
+        "message": "Password berhasil diperbarui. Silakan gunakan password baru untuk login berikutnya."
     }
 
 

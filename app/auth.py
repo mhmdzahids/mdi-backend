@@ -4,6 +4,7 @@ import hashlib
 import json
 import base64
 import time
+import bcrypt
 from typing import Optional, Dict, Any
 from fastapi import Security, HTTPException, status, Depends
 from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
@@ -15,12 +16,43 @@ JWT_SECRET = os.getenv("JWT_SECRET", "dimsum-secret-jwt-key-production-2026").en
 API_KEY = os.getenv("API_KEY", "dimsum-mes-secret-2026")
 SUPERVISOR_PIN = os.getenv("SUPERVISOR_PIN", "8888")
 
+# Jalur penyimpanan file kredensial persisten (jika user mengubah password)
+CREDENTIALS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "credentials.json")
+
+# Hash bcrypt terstandardisasi industri (cost factor 12) untuk password default 'password123'
+DEFAULT_BCRYPT_HASH = "$2b$12$FeitLrYSkG9EmWagS1oSc.WSZMGv1rvvpTRoEkegwAT390yYXYwAC"
+
+
+def hash_password(password: str) -> str:
+    """Hash password menggunakan algoritma standar industri bcrypt (cost factor 12)."""
+    salt = bcrypt.gensalt(rounds=12)
+    return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
+
+
+def verify_password(plain_password: str, hashed_or_plain: str) -> bool:
+    """
+    Verifikasi kecocokan password terhadap hash bcrypt dengan proteksi timing-attack.
+    Mendukung fallback backward compatibility.
+    """
+    if not plain_password or not hashed_or_plain:
+        return False
+
+    if hashed_or_plain.startswith(("$2a$", "$2b$", "$2y$")):
+        try:
+            return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_or_plain.encode("utf-8"))
+        except Exception:
+            return False
+
+    # Fallback aman jika terdapat plain password sebelum migrasi
+    return hmac.compare_digest(plain_password, hashed_or_plain)
+
+
 # Predefined Accounts untuk setiap Divisi & PIC
 ACCOUNTS: Dict[str, Dict[str, Any]] = {
     # 1. Divisi Daging (Giling & Mixer)
     "opr_daging": {
         "username": "opr_daging",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "OPR-DAGING",
         "full_name": "Budi Santoso",
         "role": "OPERATOR",
@@ -31,7 +63,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     },
     "pic_daging": {
         "username": "pic_daging",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "PIC-DAGING",
         "full_name": "Pak Hendra (PIC Daging)",
         "role": "STAKEHOLDER",
@@ -44,7 +76,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     # 2. Divisi Bumbu Racik
     "opr_bumbu": {
         "username": "opr_bumbu",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "OPR-BUMBU",
         "full_name": "Agus Setiawan",
         "role": "OPERATOR",
@@ -55,7 +87,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     },
     "pic_bumbu": {
         "username": "pic_bumbu",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "PIC-BUMBU",
         "full_name": "Pak Ilham (PIC Bumbu)",
         "role": "STAKEHOLDER",
@@ -68,7 +100,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     # 3. Divisi Kulit Pangsit
     "opr_kulit": {
         "username": "opr_kulit",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "OPR-KULIT",
         "full_name": "Siti Rahma",
         "role": "OPERATOR",
@@ -79,7 +111,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     },
     "pic_kulit": {
         "username": "pic_kulit",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "PIC-KULIT",
         "full_name": "Ibu Ratna (PIC Kulit)",
         "role": "STAKEHOLDER",
@@ -92,7 +124,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     # 4. Divisi Saos Dimsum
     "opr_saos": {
         "username": "opr_saos",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "OPR-SAOS",
         "full_name": "Rian Hidayat",
         "role": "OPERATOR",
@@ -103,7 +135,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     },
     "pic_saos": {
         "username": "pic_saos",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "PIC-SAOS",
         "full_name": "Pak Anwar (PIC Saos)",
         "role": "STAKEHOLDER",
@@ -116,7 +148,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     # 5. Produksi 2: Cetak & Assembly
     "opr_cetak": {
         "username": "opr_cetak",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "OPR-CETAK",
         "full_name": "Yanto Subekti",
         "role": "OPERATOR",
@@ -127,7 +159,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     },
     "pic_cetak": {
         "username": "pic_cetak",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "PIC-CETAK",
         "full_name": "Pak Bowo (PIC Cetak)",
         "role": "STAKEHOLDER",
@@ -140,7 +172,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     # 6. Produksi 2: Packing & Checker
     "opr_packing": {
         "username": "opr_packing",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "OPR-PACKING",
         "full_name": "Dewi Lestari",
         "role": "OPERATOR",
@@ -151,7 +183,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     },
     "pic_packing": {
         "username": "pic_packing",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "PIC-PACKING",
         "full_name": "Ibu Maya (PIC Packing)",
         "role": "STAKEHOLDER",
@@ -164,7 +196,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     # 7. Gudang Freezer & Sales (POS)
     "opr_gudang": {
         "username": "opr_gudang",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "OPR-GUDANG",
         "full_name": "Hadi Prasetyo",
         "role": "OPERATOR",
@@ -175,7 +207,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     },
     "pic_gudang": {
         "username": "pic_gudang",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "PIC-GUDANG",
         "full_name": "Pak Arif (PIC Gudang)",
         "role": "STAKEHOLDER",
@@ -188,7 +220,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     # 8. Supervisor Global & PPIC
     "ppic_ayu": {
         "username": "ppic_ayu",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "PPIC-AYU",
         "full_name": "Ayu (PPIC & Cetak Barcode)",
         "role": "STAKEHOLDER",
@@ -199,7 +231,7 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
     },
     "supervisor": {
         "username": "supervisor",
-        "password": "password123",
+        "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "STK-YOSI",
         "full_name": "Pak Yosi",
         "role": "STAKEHOLDER",
@@ -209,6 +241,43 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "default_prod2_tab": "PRODUCTS"
     }
 }
+
+
+def load_persisted_credentials() -> None:
+    """Muat hash password persisten yang telah diubah pengguna dari file credentials.json."""
+    if os.path.exists(CREDENTIALS_FILE):
+        try:
+            with open(CREDENTIALS_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                for uname, pwd_hash in saved.items():
+                    if uname in ACCOUNTS:
+                        ACCOUNTS[uname]["password"] = pwd_hash
+        except Exception as e:
+            print(f"[AUTH] Peringatan: Gagal memuat kredensial persisten: {e}")
+
+
+def update_account_password(username: str, new_hashed_password: str) -> None:
+    """Simpan perubahan password akun ke memori aktif dan persistensi file JSON."""
+    if username in ACCOUNTS:
+        ACCOUNTS[username]["password"] = new_hashed_password
+    try:
+        os.makedirs(os.path.dirname(CREDENTIALS_FILE), exist_ok=True)
+        current = {}
+        if os.path.exists(CREDENTIALS_FILE):
+            try:
+                with open(CREDENTIALS_FILE, "r", encoding="utf-8") as f:
+                    current = json.load(f)
+            except Exception:
+                current = {}
+        current[username] = new_hashed_password
+        with open(CREDENTIALS_FILE, "w", encoding="utf-8") as f:
+            json.dump(current, f, indent=2)
+    except Exception as e:
+        print(f"[AUTH] Peringatan: Gagal menyimpan kredensial ke disk: {e}")
+
+
+# Inisialisasi kredensial saat modul dimuat
+load_persisted_credentials()
 
 
 def b64url_encode(data: bytes) -> str:

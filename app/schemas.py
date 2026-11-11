@@ -387,6 +387,11 @@ class LoginRequest(BaseModel):
     username: str = Field(..., example="opr_daging")
     password: str = Field(..., example="password123")
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, description="Password saat ini")
+    new_password: str = Field(..., min_length=6, description="Password baru (minimal 6 karakter)")
+    confirm_password: str = Field(..., min_length=6, description="Konfirmasi password baru")
+
 class QuickSwitchRequest(BaseModel):
     username: str = Field(..., example="opr_bumbu")
 
