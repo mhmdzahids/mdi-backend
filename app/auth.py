@@ -205,17 +205,17 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "created_at": "2023-12-01T08:00:00Z"
     },
 
-    # 7. Gudang Freezer & Sales (POS)
+    # 7. Gudang & Penerimaan Dapur
     "opr_gudang": {
         "username": "opr_gudang",
         "password": DEFAULT_BCRYPT_HASH,
         "operator_id": "OPR-GUDANG",
         "full_name": "Hadi Prasetyo",
         "role": "OPERATOR",
-        "division": "Gudang Freezer & Sales (POS)",
+        "division": "Gudang & Penerimaan",
         "default_stage": "PROD_2",
         "default_station": "SALES",
-        "default_prod2_tab": "SALES",
+        "default_prod2_tab": "PRODUCTS",
         "created_at": "2024-08-20T08:00:00Z"
     },
     "pic_gudang": {
@@ -224,14 +224,40 @@ ACCOUNTS: Dict[str, Dict[str, Any]] = {
         "operator_id": "PIC-GUDANG",
         "full_name": "Pak Arif (PIC Gudang)",
         "role": "STAKEHOLDER",
-        "division": "Gudang Freezer & Sales (POS)",
+        "division": "Gudang & Penerimaan",
         "default_stage": "PROD_2",
         "default_station": "SALES",
-        "default_prod2_tab": "SALES",
+        "default_prod2_tab": "PRODUCTS",
         "created_at": "2024-01-15T08:00:00Z"
     },
 
-    # 8. Supervisor Global & PPIC
+    # 8. Kasir & Penjualan (POS)
+    "opr_kasir": {
+        "username": "opr_kasir",
+        "password": DEFAULT_BCRYPT_HASH,
+        "operator_id": "OPR-KASIR",
+        "full_name": "Siti Nurhaliza (Kasir)",
+        "role": "OPERATOR",
+        "division": "Kasir & Penjualan (POS)",
+        "default_stage": "PROD_2",
+        "default_station": "POS",
+        "default_prod2_tab": "POS",
+        "created_at": "2024-09-01T08:00:00Z"
+    },
+    "pic_kasir": {
+        "username": "pic_kasir",
+        "password": DEFAULT_BCRYPT_HASH,
+        "operator_id": "PIC-KASIR",
+        "full_name": "Rian (PIC Kasir)",
+        "role": "STAKEHOLDER",
+        "division": "Kasir & Penjualan (POS)",
+        "default_stage": "PROD_2",
+        "default_station": "POS",
+        "default_prod2_tab": "POS",
+        "created_at": "2024-09-01T08:00:00Z"
+    },
+
+    # 9. Supervisor Global & PPIC
     "ppic_ayu": {
         "username": "ppic_ayu",
         "password": DEFAULT_BCRYPT_HASH,

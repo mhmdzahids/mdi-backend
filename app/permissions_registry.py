@@ -308,6 +308,36 @@ PERMISSIONS: List[Dict[str, str]] = [
         "description": "Memverifikasi serah terima fisik pack mika/vakum di freezer"
     },
 
+    # --- POS (Point of Sale & Multi-Channel) ---
+    {
+        "code": "pos:view",
+        "name": "Lihat Kasir & POS",
+        "feature": "pos",
+        "action": "view",
+        "description": "Membuka halaman POS kasir dan melihat ringkasan penjualan"
+    },
+    {
+        "code": "pos:operate",
+        "name": "Operasi Penjualan & Scan POS",
+        "feature": "pos",
+        "action": "operate",
+        "description": "Melakukan scan kemasan dan memproses transaksi kasir langsung"
+    },
+    {
+        "code": "pos:manage_orders",
+        "name": "Kelola Antrean Ojol & Web",
+        "feature": "pos",
+        "action": "manage_orders",
+        "description": "Menerima dan memproses scan pemenuhan order ShopeeFood, GrabFood, dan Website"
+    },
+    {
+        "code": "pos:api_keys",
+        "name": "Kelola API Key Website",
+        "feature": "pos",
+        "action": "api_keys",
+        "description": "Membuat dan mencabut API Key koneksi website eksternal"
+    },
+
     # --- Scanner Operasional (1X / 2X Mode) ---
     {
         "code": "scan:operate",
@@ -468,6 +498,15 @@ SYSTEM_ROLE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             "freezer_sales:view", "freezer_sales:update", "freezer_sales:view_price", "freezer_sales:operate",
             "scan:operate",
             "logs:view",
+            "profile:view", "profile:change_password"
+        ]
+    },
+    "Kasir": {
+        "description": "Operasional kasir, penjualan langsung, scan-out pesanan ojek online (ShopeeFood, GrabFood, GoFood), dan website.",
+        "is_system": True,
+        "permissions": [
+            "pos:view", "pos:operate", "pos:manage_orders",
+            "freezer_sales:view_price",
             "profile:view", "profile:change_password"
         ]
     },

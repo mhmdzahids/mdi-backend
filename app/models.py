@@ -318,4 +318,74 @@ class Product(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# ==========================================
+# POS (POINT OF SALE) & MULTI-CHANNEL MODELS
+# ==========================================
+
+class POSOrder(Base):
+    __tablename__ = "pos_orders"
+
+    id = Column(String(50), primary_key=True) # e.g. "ORD-20261111-0001" or "WEB-1042"
+    order_no = Column(String(50), index=True, nullable=False)
+    channel = Column(String(20), nullable=False, default="OFFLINE") # 'OFFLINE', 'SHOPEEFOOD', 'GOFOOD', 'GRABFOOD', 'WEBSITE'
+    customer_name = Column(String(100), nullable=True)
+    status = Column(String(20), default="PENDING_SCAN", nullable=False) # 'PENDING_SCAN', 'COMPLETED', 'CANCELLED'
+    total_items = Column(Integer, default=0, nullable=False) # Total packs target
+    total_scanned = Column(Integer, default=0, nullable=False) # Total packs scanned
+    total_amount = Column(Integer, default=0, nullable=False) # Total rupiah
+    payment_method = Column(String(20), default="CASH") # 'CASH', 'QRIS', 'TRANSFER', 'EXTERNAL_PAID'
+    amount_paid = Column(Integer, default=0, nullable=False)
+    cashier_id = Column(String(50), nullable=True)
+    cashier_name = Column(String(100), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    items = relationship("POSOrderItem", back_populates="order", cascade="all, delete-orphan", lazy="selectin")
+    scanned_lots = relationship("POSOrderScannedLot", back_populates="order", cascade="all, delete-orphan", lazy="selectin")
+
+
+class POSOrderItem(Base):
+    __tablename__ = "pos_order_items"
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    order_id = Column(String(50), ForeignKey("pos_orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id = Column(String(50), ForeignKey("products.id"), nullable=False)
+    product_name = Column(String(100), nullable=False)
+    qty_ordered = Column(Integer, default=1, nullable=False)
+    qty_scanned = Column(Integer, default=0, nullable=False)
+    unit_price = Column(Integer, default=0, nullable=False)
+    subtotal = Column(Integer, default=0, nullable=False)
+
+    order = relationship("POSOrder", back_populates="items")
+
+
+class POSOrderScannedLot(Base):
+    __tablename__ = "pos_order_scanned_lots"
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    order_id = Column(String(50), ForeignKey("pos_orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    lot_qr_code = Column(String(100), ForeignKey("lot_trackings.lot_qr_code"), nullable=False, index=True)
+    product_id = Column(String(50), nullable=False)
+    product_name = Column(String(100), nullable=False)
+    scanned_at = Column(DateTime, default=datetime.utcnow)
+    scanned_by = Column(String(50), nullable=True)
+
+    order = relationship("POSOrder", back_populates="scanned_lots")
+
+
+class POSApiKey(Base):
+    __tablename__ = "pos_api_keys"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False) # e.g. "Website E-Commerce Dimsum"
+    key_prefix = Column(String(16), nullable=False) # e.g. "mdi_live_83b1"
+    key_hash = Column(String(128), nullable=False, unique=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_by = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+
+
+
 
