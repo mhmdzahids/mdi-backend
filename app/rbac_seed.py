@@ -159,7 +159,7 @@ async def seed_rbac_data(session: AsyncSession) -> dict:
         "opr_gudang": ["Gudang / Penerima Barang"],
         "pic_gudang": ["Gudang / Penerima Barang", "Viewer"],
         "opr_kasir": ["Kasir"],
-        "pic_kasir": ["Kasir", "Viewer"],
+        "pic_kasir": ["PIC Kasir", "Viewer"],
         "ppic_ayu": ["PPIC"],
         "supervisor": [
             "PPIC", "Viewer", "Produksi Giling & Mix", "Produksi Bumbu",

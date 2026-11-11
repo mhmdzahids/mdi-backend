@@ -28,7 +28,7 @@ from app.models import (
     User
 )
 from app.auth import get_current_user
-from app.rbac import require_permission
+from app.rbac import require_permission, get_effective_user_permissions
 from app.audit_logger import log_audit_event, extract_client_ip
 
 router = APIRouter(prefix="/pos", tags=["Point of Sale"])
@@ -370,6 +370,11 @@ async def list_orders(
     res = await db.execute(stmt)
     orders = res.scalars().all()
 
+    user_id = current_user.get("user_id")
+    username = current_user.get("sub") or current_user.get("username")
+    perms = await get_effective_user_permissions(user_id, username, db)
+    can_view_revenue = current_user.get("is_superadmin", False) or "pos:view_revenue" in perms
+
     result = []
     for o in orders:
         result.append({
@@ -380,7 +385,7 @@ async def list_orders(
             "status": o.status,
             "total_items": o.total_items,
             "total_scanned": o.total_scanned,
-            "total_amount": o.total_amount,
+            "total_amount": o.total_amount if can_view_revenue else None,
             "payment_method": o.payment_method,
             "cashier_name": o.cashier_name,
             "notes": o.notes,
@@ -393,8 +398,8 @@ async def list_orders(
                     "product_name": it.product_name,
                     "qty_ordered": it.qty_ordered,
                     "qty_scanned": it.qty_scanned,
-                    "unit_price": it.unit_price,
-                    "subtotal": it.subtotal
+                    "unit_price": it.unit_price if can_view_revenue else None,
+                    "subtotal": it.subtotal if can_view_revenue else None
                 }
                 for it in o.items
             ],
@@ -879,12 +884,18 @@ async def get_daily_pos_summary(
     pending_res = await db.execute(pending_stmt)
     pending_count = pending_res.scalar() or 0
 
+    user_id = current_user.get("user_id")
+    username = current_user.get("sub") or current_user.get("username")
+    perms = await get_effective_user_permissions(user_id, username, db)
+    can_view_revenue = current_user.get("is_superadmin", False) or "pos:view_revenue" in perms
+
     return {
         "today_date": date.today().isoformat(),
-        "total_revenue": total_revenue,
+        "can_view_revenue": can_view_revenue,
+        "total_revenue": total_revenue if can_view_revenue else None,
         "total_packs_sold": total_packs,
         "total_transactions": total_transactions,
         "pending_queue_count": pending_count,
-        "by_channel": by_channel,
-        "by_payment": by_payment
+        "by_channel": by_channel if can_view_revenue else None,
+        "by_payment": by_payment if can_view_revenue else None
     }

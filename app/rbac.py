@@ -59,16 +59,21 @@ async def get_effective_user_permissions(
     # 2. Query dari database
     user = None
     if user_id:
-        stmt = (
-            select(User)
-            .options(
-                selectinload(User.roles).selectinload(Role.permissions)
+        try:
+            uid = int(user_id)
+            stmt = (
+                select(User)
+                .options(
+                    selectinload(User.roles).selectinload(Role.permissions)
+                )
+                .where(User.id == uid)
             )
-            .where(User.id == user_id)
-        )
-        res = await db.execute(stmt)
-        user = res.scalar_one_or_none()
-    elif username:
+            res = await db.execute(stmt)
+            user = res.scalar_one_or_none()
+        except (ValueError, TypeError):
+            user = None
+
+    if not user and username:
         stmt = (
             select(User)
             .options(

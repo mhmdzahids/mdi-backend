@@ -331,6 +331,13 @@ PERMISSIONS: List[Dict[str, str]] = [
         "description": "Menerima dan memproses scan pemenuhan order ShopeeFood, GrabFood, dan Website"
     },
     {
+        "code": "pos:view_revenue",
+        "name": "Lihat Omzet & Rekap Finansial POS",
+        "feature": "pos",
+        "action": "view_revenue",
+        "description": "Melihat total omzet rupiah, rekap keuangan kasir, dan laporan penjualan per channel (Standar Loss Prevention)"
+    },
+    {
         "code": "pos:api_keys",
         "name": "Kelola API Key Website",
         "feature": "pos",
@@ -502,10 +509,19 @@ SYSTEM_ROLE_TEMPLATES: Dict[str, Dict[str, Any]] = {
         ]
     },
     "Kasir": {
-        "description": "Operasional kasir, penjualan langsung, scan-out pesanan ojek online (ShopeeFood, GrabFood, GoFood), dan website.",
+        "description": "Operasional kasir, penjualan langsung, scan-out pesanan ojek online (ShopeeFood, GrabFood, GoFood), dan website. Tidak memiliki akses ke total omzet kumulatif (standar blind cash control).",
         "is_system": True,
         "permissions": [
             "pos:view", "pos:operate", "pos:manage_orders",
+            "freezer_sales:view_price",
+            "profile:view", "profile:change_password"
+        ]
+    },
+    "PIC Kasir": {
+        "description": "Supervisor kasir, rekap omzet harian POS, rekonsiliasi kas (Z-Report), dan audit penjualan lintas channel.",
+        "is_system": True,
+        "permissions": [
+            "pos:view", "pos:operate", "pos:manage_orders", "pos:view_revenue",
             "freezer_sales:view_price",
             "profile:view", "profile:change_password"
         ]
