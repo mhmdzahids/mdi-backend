@@ -301,6 +301,13 @@ PERMISSIONS: List[Dict[str, str]] = [
         "description": "Mengubah nominal harga produk pada katalog POS"
     },
     {
+        "code": "freezer_sales:delete",
+        "name": "Hapus Produk POS",
+        "feature": "freezer_sales",
+        "action": "delete",
+        "description": "Menghapus produk dari katalog master POS & Website"
+    },
+    {
         "code": "freezer_sales:operate",
         "name": "Operasi Penerimaan Sales",
         "feature": "freezer_sales",
@@ -344,6 +351,23 @@ PERMISSIONS: List[Dict[str, str]] = [
         "action": "api_keys",
         "description": "Membuat dan mencabut API Key koneksi website eksternal"
     },
+
+    # --- Promosi Website (Voucher & Banner) ---
+    {
+        "code": "promotions:view",
+        "name": "Lihat Voucher & Banner Promosi",
+        "feature": "promotions",
+        "action": "view",
+        "description": "Melihat daftar kupon voucher dan banner promosi website buyer"
+    },
+    {
+        "code": "promotions:manage",
+        "name": "Kelola Voucher & Banner Promosi",
+        "feature": "promotions",
+        "action": "manage",
+        "description": "Membuat, mengedit, dan menghapus voucher kupon serta banner website buyer"
+    },
+
 
     # --- Scanner Operasional (1X / 2X Mode) ---
     {
@@ -502,7 +526,7 @@ SYSTEM_ROLE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             "inbound:view", "inbound:create", "inbound:export",
             "outbound:view", "outbound:create", "outbound:export",
             "inventory:view", "inventory:export",
-            "freezer_sales:view", "freezer_sales:update", "freezer_sales:view_price", "freezer_sales:operate",
+            "freezer_sales:view", "freezer_sales:update", "freezer_sales:view_price", "freezer_sales:edit_price", "freezer_sales:delete", "freezer_sales:operate",
             "scan:operate",
             "logs:view",
             "profile:view", "profile:change_password"

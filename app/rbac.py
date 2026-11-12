@@ -157,6 +157,51 @@ def require_permission(permission_code: str):
     return permission_checker
 
 
+def require_any_permission(*permission_codes: str):
+    """
+    FastAPI Dependency:
+    Menegakkan otorisasi jika user memiliki MINIMAL SALAH SATU izin dari daftar yang diberikan.
+    """
+    async def any_permission_checker(
+        request: Request,
+        current_user: Dict[str, Any] = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db)
+    ) -> Dict[str, Any]:
+        if current_user.get("is_superadmin") is True:
+            return current_user
+
+        if current_user.get("is_active") is False:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Akses ditolak: Akun Anda telah dinonaktifkan oleh Administrator."
+            )
+
+        user_id = current_user.get("user_id")
+        username = current_user.get("sub") or current_user.get("username")
+        permissions = await get_effective_user_permissions(user_id, username, db)
+
+        if not any(code in permissions for code in permission_codes):
+            await log_audit_event(
+                db=db,
+                aksi="ACCESS_DENIED",
+                objek_tipe="ENDPOINT",
+                objek_id=",".join(permission_codes),
+                ringkasan=f"Akses ditolak untuk izin salah satu dari '{permission_codes}' pada endpoint '{request.url.path}'",
+                user_id=user_id,
+                nama_user=username or "UNKNOWN",
+                request=request,
+                hasil="DENIED"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Akses ditolak: Anda tidak memiliki salah satu izin yang diperlukan ({', '.join(permission_codes)})."
+            )
+
+        return current_user
+
+    return any_permission_checker
+
+
 # --- Rate Limiter Brute Force Protection ---
 
 def check_login_rate_limit(client_identifier: str) -> None:

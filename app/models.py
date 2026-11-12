@@ -341,6 +341,7 @@ class POSOrder(Base):
     total_amount = Column(Integer, default=0, nullable=False) # Total rupiah
     payment_method = Column(String(20), default="CASH") # 'CASH', 'QRIS', 'TRANSFER', 'EXTERNAL_PAID'
     amount_paid = Column(Integer, default=0, nullable=False)
+    payment_ref = Column(String(100), nullable=True) # e.g. Paywuz transaction ID / reference
     cashier_id = Column(String(50), nullable=True)
     cashier_name = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)

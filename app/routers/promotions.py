@@ -6,8 +6,11 @@ Mengelola modul Voucher / Kupon Promo, Banner Promosi, dan Informasi Kunci API B
 import os
 import io
 import uuid
+import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +20,9 @@ from PIL import Image
 from ..database import get_db
 from ..models import Voucher, Banner, POSApiKey
 from ..auth import get_current_user
+from ..rbac import require_permission
 from ..audit_logger import log_audit_event
+from .products import trigger_buyer_sync
 
 router = APIRouter(prefix="/promotions", tags=["Manajemen Promosi & Voucher"])
 
@@ -105,7 +110,7 @@ async def list_vouchers(
     status_filter: Optional[str] = "all",  # all, active, inactive
     visibility: Optional[str] = "all",     # all, public, private
     db: AsyncSession = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("promotions:view"))
 ):
     """
     Daftar seluruh kupon / voucher promosi untuk panel admin.
@@ -155,7 +160,7 @@ async def create_voucher(
     payload: VoucherCreateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("promotions:manage"))
 ):
     """
     Buat kupon / voucher promo baru.
@@ -203,6 +208,7 @@ async def create_voucher(
         nama_user=current_user.get("full_name") or current_user.get("username") or "ADMIN",
         request=request
     )
+    trigger_buyer_sync()
 
     return VoucherResponse(
         id=new_v.id,
@@ -228,7 +234,7 @@ async def update_voucher(
     payload: VoucherUpdateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("promotions:manage"))
 ):
     """
     Perbarui data kupon / voucher promo.
@@ -273,6 +279,7 @@ async def update_voucher(
         nama_user=current_user.get("full_name") or current_user.get("username") or "ADMIN",
         request=request
     )
+    trigger_buyer_sync()
 
     return VoucherResponse(
         id=voucher.id,
@@ -296,7 +303,7 @@ async def update_voucher(
 async def toggle_voucher_active(
     voucher_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("promotions:manage"))
 ):
     """
     Toggle cepat status aktif/nonaktif kupon.
@@ -310,6 +317,7 @@ async def toggle_voucher_active(
     voucher.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(voucher)
+    trigger_buyer_sync()
 
     return VoucherResponse(
         id=voucher.id,
@@ -333,7 +341,7 @@ async def toggle_voucher_active(
 async def delete_voucher(
     voucher_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("promotions:manage"))
 ):
     """
     Hapus voucher promo dari sistem.
@@ -345,6 +353,7 @@ async def delete_voucher(
 
     await db.delete(voucher)
     await db.commit()
+    trigger_buyer_sync()
     return {"success": True, "message": f"Kupon {voucher.code} berhasil dihapus."}
 
 
@@ -355,7 +364,7 @@ async def delete_voucher(
 @router.get("/banners", response_model=List[BannerResponse])
 async def list_banners(
     db: AsyncSession = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("promotions:view"))
 ):
     """
     Daftar seluruh banner promosi untuk panel admin.
@@ -377,7 +386,7 @@ async def list_banners(
 @router.post("/banners/upload")
 async def upload_banner_image(
     file: UploadFile = File(...),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("promotions:manage"))
 ):
     """
     Upload file banner baru (JPG, PNG, WEBP, maks 5MB) dan simpan sebagai WebP teroptimasi.
@@ -406,7 +415,11 @@ async def upload_banner_image(
         raw_img = Image.open(io.BytesIO(content))
         raw_img.load()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Gagal memproses file banner: {str(e)}")
+        logger.error(f"Gagal memproses file banner: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Gagal memproses file gambar banner. Pastikan file gambar valid."
+        )
 
     # Convert ke RGB
     if raw_img.mode != "RGB":
@@ -432,7 +445,7 @@ async def upload_banner_image(
 async def create_banner(
     payload: BannerCreateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("promotions:manage"))
 ):
     """
     Simpan banner baru ke database setelah upload.
@@ -446,6 +459,7 @@ async def create_banner(
     db.add(new_b)
     await db.commit()
     await db.refresh(new_b)
+    trigger_buyer_sync()
 
     return BannerResponse(
         id=new_b.id,
@@ -460,7 +474,7 @@ async def create_banner(
 async def toggle_banner_active(
     banner_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("promotions:manage"))
 ):
     """
     Toggle aktif/nonaktif penayangan banner di website buyer.
@@ -473,6 +487,7 @@ async def toggle_banner_active(
     banner.is_active = not banner.is_active
     await db.commit()
     await db.refresh(banner)
+    trigger_buyer_sync()
 
     return BannerResponse(
         id=banner.id,
@@ -487,7 +502,7 @@ async def toggle_banner_active(
 async def delete_banner(
     banner_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("promotions:manage"))
 ):
     """
     Hapus banner dan bersihkan file fisiknya dari disk.
@@ -497,17 +512,20 @@ async def delete_banner(
     if not banner:
         raise HTTPException(status_code=404, detail="Banner tidak ditemukan.")
 
-    # Bersihkan file fisik
+    # Bersihkan file fisik dengan verifikasi path kanonikal di dalam uploads/banners (VULN-15)
     if banner.image_url:
-        clean_p = banner.image_url.lstrip("/")
-        if os.path.exists(clean_p):
+        base_dir = os.path.abspath(UPLOAD_BANNER_DIR)
+        filename = os.path.basename(banner.image_url)
+        target_path = os.path.abspath(os.path.join(base_dir, filename))
+        if target_path.startswith(base_dir) and os.path.isfile(target_path):
             try:
-                os.remove(clean_p)
-            except Exception:
-                pass
+                os.remove(target_path)
+            except Exception as e:
+                logger.warning(f"Gagal menghapus file banner {target_path}: {e}")
 
     await db.delete(banner)
     await db.commit()
+    trigger_buyer_sync()
     return {"success": True, "message": "Banner berhasil dihapus."}
 
 
@@ -517,7 +535,7 @@ async def delete_banner(
 
 @router.get("/api-key-info")
 async def get_buyer_api_key_info(
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission("pos:api_keys"))
 ):
     """
     Mengambil info API Key integrasi website buyer agar admin dapat menyalinnya.

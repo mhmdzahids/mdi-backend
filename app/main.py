@@ -1,7 +1,11 @@
 import os
+import mimetypes
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+mimetypes.add_type('image/webp', '.webp')
+mimetypes.add_type('image/svg+xml', '.svg')
 from .routers import production1, production2, auth, scan, admin, products, pos, public_buyer, promotions
 from .auth import get_current_user
 from .database import engine, Base, AsyncSessionLocal
@@ -52,6 +56,16 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 @app.on_event("startup")
 async def on_startup():
+    # 0. Enforce secure secrets in production mode (VULN-12)
+    app_env = os.getenv("APP_ENV", "development").lower()
+    jwt_sec = os.getenv("JWT_SECRET", "")
+    api_k = os.getenv("API_KEY", "")
+    if app_env == "production":
+        if not jwt_sec or "change" in jwt_sec.lower() or jwt_sec == "dimsum-secret-jwt-key-production-2026":
+            raise RuntimeError("CRITICAL SECURITY CONFIGURATION ERROR: JWT_SECRET must be configured with a secure 32+ byte secret in production mode.")
+        if not api_k or "change" in api_k.lower() or api_k == "dimsum-mes-secret-2026":
+            raise RuntimeError("CRITICAL SECURITY CONFIGURATION ERROR: Master API_KEY must be changed from the default value in production mode.")
+
     # 1. Buat tabel otomatis jika belum ada (berguna saat dev lokal)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

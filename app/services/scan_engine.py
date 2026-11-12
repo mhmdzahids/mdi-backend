@@ -121,8 +121,10 @@ def get_target_station_for_lot(lot: LotTracking, origin_station: str) -> str:
         return "ASSEMBLY_STATION"
     if lot_type == "BUMBU" or qr.startswith("BM-") or qr.startswith("SP-") or qr.startswith("IN-BM-"):
         return "MEAT_STATION"
-    if lot_type == "DAGING" or qr.startswith("DG-") or qr.startswith("MEAT-") or qr.startswith("IN-DG-"):
+    if qr.startswith("IN-DG-"):
         return "MEAT_STATION"
+    if lot_type == "DAGING" or qr.startswith("DG-") or qr.startswith("MEAT-"):
+        return "SEASONING_STATION"
     return STATION_METADATA.get(origin_station, {}).get("target", "ASSEMBLY_STATION")
 
 

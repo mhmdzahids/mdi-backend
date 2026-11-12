@@ -29,17 +29,28 @@ router = APIRouter(tags=["Scan Mode & Transitions"])
 def verify_pic_or_admin(user: Dict[str, Any]):
     """
     Hanya PIC, Supervisor, atau Admin yang diizinkan mengubah mode scan operasional.
+    Memeriksa izin explicit dan role resmi tanpa substring heuristics (VULN-05).
     """
+    if user.get("is_superadmin") is True or is_global_supervisor(user):
+        return
+
     role = (user.get("role") or "").upper()
     op_id = (user.get("operator_id") or "").upper()
     username = (user.get("username") or user.get("sub") or "").lower()
 
+    pic_operators = [
+        "PIC-DAGING", "PIC-BUMBU", "PIC-KULIT", "PIC-SAOS",
+        "PIC-CETAK", "PIC-PACKING", "PIC-GUDANG", "STK-YOSI", "PPIC-AYU", "SYSTEM_API"
+    ]
+    pic_usernames = [
+        "supervisor", "ppic_ayu", "admin", "pic_daging", "pic_bumbu",
+        "pic_kulit", "pic_saos", "pic_cetak", "pic_packing", "pic_gudang"
+    ]
+
     is_allowed = (
-        is_global_supervisor(user)
-        or role in ["STAKEHOLDER", "SUPERVISOR", "ADMIN", "MANAGER"]
-        or "PIC" in op_id
-        or "SUPERVISOR" in op_id
-        or username.startswith("pic_")
+        role in ["STAKEHOLDER", "SUPERVISOR", "ADMIN", "SUPERADMIN", "MANAGER"]
+        or op_id in pic_operators
+        or username in pic_usernames
     )
     if not is_allowed:
         raise HTTPException(

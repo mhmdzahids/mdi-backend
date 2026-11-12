@@ -1,14 +1,22 @@
 import os
 import math
 import json
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, delete, or_, func, cast, Date
 from datetime import datetime, timezone, timedelta, date
 from typing import List, Optional, Dict, Any
 
+logger = logging.getLogger(__name__)
+
 # Timezone WIB (UTC+7) untuk lot code date string
 WIB = timezone(timedelta(hours=7))
+
+def escape_like_wildcards(val: str) -> str:
+    """Escape % and _ wildcards for SQL LIKE/ILIKE queries (VULN-16)."""
+    return val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 
 def today_wib() -> str:
     """Tanggal hari ini dalam format YYYYMMDD sesuai timezone WIB (UTC+7)."""
@@ -22,7 +30,7 @@ from ..services.scan_engine import (
     STATION_METADATA,
 )
 from ..database import get_db
-from ..auth import require_role, require_division, get_current_user, is_global_supervisor, require_ppic
+from ..auth import require_role, require_division, get_current_user, is_global_supervisor, require_ppic, verify_supervisor_pin
 from ..rbac import require_permission
 from ..audit_logger import log_audit_event
 from ..models import (
@@ -667,8 +675,8 @@ async def scan_in_meat_lot(
     notes = "Scan-IN diterima di Divisi Bumbu"
     if lot.current_status == "READY_IN_MEAT_STATION":
         if payload.allow_supervisor_bypass:
-            expected_pin = os.getenv("SUPERVISOR_PIN", "8888")
-            if not payload.supervisor_pin or str(payload.supervisor_pin).strip() != expected_pin:
+            client_id = current_user.get("operator_id") or current_user.get("sub") or "OPR"
+            if not verify_supervisor_pin(payload.supervisor_pin, client_id=client_id):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Otorisasi Supervisor gagal: PIN Supervisor tidak valid atau tidak disertakan."
@@ -1158,10 +1166,10 @@ async def list_custody_logs(
     user_st = (current_user.get("default_station") or "").upper()
     sub = (current_user.get("sub") or "").lower()
     is_admin_supervisor = (
-        user_role == "SUPERVISOR" or
-        "PPIC" in user_div or
-        "SUPERVISOR" in user_div or
-        sub in ["supervisor", "ppic", "api_client"]
+        is_global_supervisor(current_user)
+        or user_role in ["SUPERVISOR", "PPIC", "ADMIN", "SUPERADMIN"]
+        or user_div in ["SUPERVISOR & PPIC", "PPIC", "SUPERADMIN", "SYSTEM API", "SUPERVISOR", "PPIC / ADMINISTRASI PRODUKSI"]
+        or sub in ["supervisor", "ppic", "api_client", "superadmin", "admin"]
     )
 
     # Batasi data riwayat yang dimuat sesuai wewenang divisi & stasiun pengguna (Non-Supervisor)
@@ -1329,11 +1337,16 @@ async def generate_seasoning_sacks(
 
 # 9b. KONFIRMASI PENEMPELAN QR & STOCK-IN FISIK OLEH PEGAWAI
 @router.post("/lot/confirm-stock-in", response_model=List[LotResponse])
-async def confirm_stock_in(payload: ConfirmStockInRequest, db: AsyncSession = Depends(get_db)):
+async def confirm_stock_in(
+    payload: ConfirmStockInRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """
     Pegawai menempelkan label QR ke produk fisik, lalu men-scan QR untuk
     mengonfirmasi bahwa produk fisik sudah selesai dan resmi masuk ke stok stasiun (Stock-In).
     Mengubah status dari PRINTED_PENDING_STOCK_IN -> READY_IN_<STATION>.
+    Audit log CustodyTransferLog diisi dari identitas sesi current_user yang terverifikasi (VULN-09).
     """
     try:
         if not payload.lot_codes:
@@ -1346,6 +1359,14 @@ async def confirm_stock_in(payload: ConfirmStockInRequest, db: AsyncSession = De
 
         if not all_lots:
             raise HTTPException(status_code=404, detail="Kode lot tidak ditemukan di database.")
+
+        # Identitas operator dari sesi current_user terverifikasi (VULN-09)
+        if current_user.get("sub") != "api_client":
+            operator_user_id = current_user.get("operator_id") or current_user.get("sub") or "OPERATOR"
+            operator_active_role = current_user.get("role") or "OPERATOR"
+        else:
+            operator_user_id = payload.operator_id or current_user.get("operator_id") or "SYSTEM_API"
+            operator_active_role = payload.operator_role or current_user.get("role") or "STAKEHOLDER"
 
         updated_lots = []
         for lot in all_lots:
@@ -1392,8 +1413,8 @@ async def confirm_stock_in(payload: ConfirmStockInRequest, db: AsyncSession = De
                 action_type="STOCK_IN",
                 station_id=station,
                 target_station=None,
-                user_id=payload.operator_id,
-                user_role_active=payload.operator_role,
+                user_id=operator_user_id,
+                user_role_active=operator_active_role,
                 notes=payload.notes or f"Pegawai konfirmasi fisik {item_desc} {lot.lot_qr_code} selesai & label tertempel."
             )
             db.add(log)
@@ -1650,7 +1671,7 @@ async def produce_dough_mixed(
                 lot_qr_code=dough_lot_code,
                 plan_id=payload.plan_id,
                 lot_type="ADONAN",
-                current_status="PRINTED_PENDING_STOCK_IN",
+                current_status="READY_IN_MEAT_MIXING_STATION",
                 current_station="MEAT_MIXING_STATION",
                 quantity=payload.dough_yield_kg,
                 unit="KG"
@@ -1675,9 +1696,10 @@ async def produce_dough_mixed(
 
     except Exception as e:
         await db.rollback()
+        logger.exception("Rollback error saat produce dough mixed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Rollback error saat produce dough mixed: {str(e)}"
+            detail="Gagal memproses pencampuran adonan. Terjadi kesalahan pada server."
         )
 
 
@@ -1690,17 +1712,17 @@ async def dev_wipe_database(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    [DEV ONLY] Menghapus seluruh data operasional:
-    - Seluruh LotTracking
-    - Seluruh CustodyTransferLog
-    - Seluruh ScanEvent
-    - Seluruh DiscrepancyLog
-    - Mereset ProductionPlan ke target default hari ini
-    - Mereset ScanSetting ke default GLOBAL '1X'
-
-    Hanya dapat dieksekusi oleh PPIC / Supervisor Global.
+    [DEV ONLY] Menghapus seluruh data operasional.
+    Dinonaktifkan di luar development dan memerlukan hak akses Super Admin / PPIC Global.
     """
-    if not is_global_supervisor(current_user):
+    app_env = os.getenv("APP_ENV", "development").lower()
+    if app_env != "development":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Endpoint tidak ditemukan."
+        )
+
+    if not (current_user.get("is_superadmin") is True or is_global_supervisor(current_user)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Akses ditolak: Operasi wipe database hanya diizinkan untuk PPIC / Supervisor."
@@ -1761,9 +1783,10 @@ async def dev_wipe_database(
         }
     except Exception as e:
         await db.rollback()
+        logger.exception("Gagal melakukan wipe database: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gagal melakukan wipe database: {str(e)}"
+            detail="Gagal melakukan wipe database. Terjadi kesalahan internal server."
         )
 
 
@@ -3112,13 +3135,11 @@ async def get_ppic_export_report(
     """
     # 1. Validasi Hak Akses (PPIC / Supervisor / PIC / Admin)
     role = (current_user.get("role") or "").upper()
-    division = (current_user.get("division") or "").lower()
-    username = (current_user.get("username") or "").lower()
+    division = (current_user.get("division") or "").upper()
     is_authorized = (
         is_global_supervisor(current_user)
         or role in ["STAKEHOLDER", "PIC", "SUPERVISOR", "ADMIN", "PPIC"]
-        or "ppic" in division
-        or "ayu" in username
+        or division in ["PPIC", "SUPERVISOR", "PPIC / ADMINISTRASI PRODUKSI", "SUPERVISOR & PPIC"]
     )
     if not is_authorized:
         raise HTTPException(
@@ -3155,7 +3176,8 @@ async def get_ppic_export_report(
         if cat_filter:
             in_query = in_query.where(SupplierInbound.category == cat_filter)
         if sup_filter:
-            in_query = in_query.where(SupplierInbound.supplier_name.ilike(f"%{sup_filter}%"))
+            escaped_sup = escape_like_wildcards(sup_filter)
+            in_query = in_query.where(SupplierInbound.supplier_name.ilike(f"%{escaped_sup}%", escape="\\"))
         in_query = in_query.order_by(desc(SupplierInbound.inbound_date), desc(SupplierInbound.created_at)).limit(10000)
         in_res = await db.execute(in_query)
         inbound_records = in_res.scalars().all()
@@ -3188,7 +3210,8 @@ async def get_ppic_export_report(
         if cat_filter:
             out_query = out_query.where(SupplierOutbound.category == cat_filter)
         if sup_filter:
-            out_query = out_query.where(SupplierOutbound.item_name.ilike(f"%{sup_filter}%"))
+            escaped_sup = escape_like_wildcards(sup_filter)
+            out_query = out_query.where(SupplierOutbound.item_name.ilike(f"%{escaped_sup}%", escape="\\"))
         out_query = out_query.order_by(desc(SupplierOutbound.outbound_date), desc(SupplierOutbound.created_at)).limit(10000)
         out_res = await db.execute(out_query)
         outbound_records = out_res.scalars().all()

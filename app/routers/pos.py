@@ -7,7 +7,11 @@ dan penerimaan order e-commerce dari website eksternal melalui API Key.
 
 import hashlib
 import secrets
+import uuid
+import logging
 from datetime import datetime, timezone, date
+
+logger = logging.getLogger(__name__)
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request, status
@@ -28,7 +32,7 @@ from app.models import (
     User
 )
 from app.auth import get_current_user
-from app.rbac import require_permission, get_effective_user_permissions
+from app.rbac import require_permission, require_any_permission, get_effective_user_permissions
 from app.audit_logger import log_audit_event, extract_client_ip
 
 router = APIRouter(prefix="/pos", tags=["Point of Sale"])
@@ -68,9 +72,23 @@ class DirectCheckoutRequest(BaseModel):
     customer_name: Optional[str] = "Walk-in"
     payment_method: str = "CASH" # CASH, QRIS, TRANSFER
     amount_paid: int = 0
+    payment_ref: Optional[str] = None
     items: List[DirectOrderItem]
     scanned_lots: List[DirectScannedLot]
     notes: Optional[str] = None
+
+class POSQRISRequest(BaseModel):
+    amount: int
+    customer_name: Optional[str] = "Walk-in"
+    phone: Optional[str] = "081234567890"
+    order_id: Optional[str] = None
+
+class POSVARequest(BaseModel):
+    amount: int
+    bank_code: str = "BNIVA"
+    customer_name: Optional[str] = "Walk-in"
+    phone: Optional[str] = "081234567890"
+    order_id: Optional[str] = None
 
 class CreateQueueOrderRequest(BaseModel):
     order_no: str # misal "SPF-8821" atau "GRB-129"
@@ -230,10 +248,70 @@ async def direct_checkout(
     order_id = generate_order_id("ORD")
     now = datetime.now()
 
-    # 1. Hitung total items & total rupiah
-    total_amount = sum(item.qty * item.price for item in payload.items)
-    total_items = sum(item.qty for item in payload.items)
+    # 1. Hitung total items & total rupiah secara otoritatif dari server (Product.price)
+    from app.services.paywuz_service import PaywuzService
+
+    product_ids = [item.product_id for item in payload.items if item.product_id]
+    products_map = {}
+    if product_ids:
+        p_stmt = select(Product).where(Product.id.in_(product_ids))
+        p_res = await db.execute(p_stmt)
+        products_map = {p.id: p for p in p_res.scalars().all()}
+
+    computed_total = 0
+    total_items = 0
+    for item in payload.items:
+        prod = products_map.get(item.product_id)
+        if prod and prod.price is not None:
+            # Overwrite dengan harga resmi dari server untuk mencegah manipulasi client
+            item.price = prod.price
+        computed_total += item.qty * item.price
+        total_items += item.qty
+
+    total_amount = computed_total
     total_scanned = len(payload.scanned_lots)
+
+    # 1.b. Validasi Pembayaran QRIS / VA ke Paywuz & Anti-Replay
+    pay_method = (payload.payment_method or "CASH").upper()
+    if pay_method in ["QRIS", "VA"]:
+        if not payload.payment_ref:
+            raise HTTPException(
+                status_code=400,
+                detail="Referensi pembayaran (payment_ref) wajib disertakan untuk metode QRIS/VA."
+            )
+
+        # Cek keunikan payment_ref pada pos_orders (anti-replay)
+        ref_stmt = select(POSOrder).where(POSOrder.payment_ref == payload.payment_ref)
+        ref_res = await db.execute(ref_stmt)
+        if ref_res.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail="Referensi pembayaran ini sudah pernah digunakan (Replay Attack dicegah)."
+            )
+
+        # Verifikasi status pembayaran ke gateway Paywuz
+        try:
+            pw_status = await PaywuzService.get_status(payload.payment_ref)
+            raw_st = str(pw_status.get("status", "")).lower()
+            paid_amount = int(pw_status.get("amount", 0))
+            if raw_st not in ["settled", "paid"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Pembayaran belum diselesaikan pada gateway Paywuz (Status: {raw_st})."
+                )
+            if paid_amount < total_amount:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Nominal pembayaran tidak mencukupi (Dibayar: {paid_amount}, Total: {total_amount})."
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Paywuz payment verification error: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail="Gagal memverifikasi status pembayaran dari payment gateway."
+            )
 
     # 2. Verifikasi seluruh scanned lots agar tidak ada yang double-sold
     lot_codes = [s.lot_qr_code for s in payload.scanned_lots]
@@ -261,6 +339,7 @@ async def direct_checkout(
         total_amount=total_amount,
         payment_method=payload.payment_method.upper(),
         amount_paid=payload.amount_paid or total_amount,
+        payment_ref=payload.payment_ref,
         cashier_id=str(current_user.get("id") or current_user.get("username")),
         cashier_name=current_user.get("full_name") or current_user.get("username"),
         notes=payload.notes,
@@ -326,6 +405,131 @@ async def direct_checkout(
             "completed_at": order.completed_at.isoformat()
         }
     }
+
+
+# ==========================================
+# 2.B PAYMENT GATEWAY (PAYWUZ DYNAMIC QRIS & VA)
+# ==========================================
+
+@router.post("/payment/qris")
+async def pos_create_qris(
+    payload: POSQRISRequest,
+    current_user: Dict[str, Any] = Depends(require_permission("pos:operate"))
+):
+    """
+    Generate dynamic QRIS dari Paywuz Sandbox untuk transaksi kasir POS walk-in.
+    """
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Nominal pembayaran harus lebih dari 0.")
+
+    order_ref = payload.order_id or f"POS-{uuid.uuid4().hex[:10].upper()}"
+    try:
+        from app.services.paywuz_service import PaywuzService
+        tx_data = await PaywuzService.create_qris(
+            order_id=order_ref,
+            amount=payload.amount,
+            customer_name=payload.customer_name,
+            phone=payload.phone
+        )
+        return {
+            "success": True,
+            "data": tx_data
+        }
+    except Exception as e:
+        logger.error(f"Error generating Paywuz POS QRIS: {e}")
+        raise HTTPException(status_code=400, detail="Gagal membuat transaksi QRIS. Silakan coba kembali.")
+
+
+@router.post("/payment/va")
+async def pos_create_va(
+    payload: POSVARequest,
+    current_user: Dict[str, Any] = Depends(require_permission("pos:operate"))
+):
+    """
+    Generate Virtual Account dari Paywuz Sandbox untuk kasir walk-in / invoice transfer.
+    """
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Nominal pembayaran harus lebih dari 0.")
+
+    order_ref = payload.order_id or f"POS-{uuid.uuid4().hex[:10].upper()}"
+    try:
+        from app.services.paywuz_service import PaywuzService
+        tx_data = await PaywuzService.create_va(
+            order_id=order_ref,
+            amount=payload.amount,
+            bank_code=payload.bank_code,
+            customer_name=payload.customer_name,
+            phone=payload.phone
+        )
+        return {
+            "success": True,
+            "data": tx_data
+        }
+    except Exception as e:
+        logger.error(f"Error generating Paywuz POS VA: {e}")
+        raise HTTPException(status_code=400, detail="Gagal membuat Virtual Account. Silakan coba kembali.")
+
+
+@router.get("/payment/status/{order_id}")
+async def pos_check_payment_status(
+    order_id: str,
+    current_user: Dict[str, Any] = Depends(require_permission("pos:operate"))
+):
+    """
+    Cek status pembayaran Paywuz secara real-time berdasarkan order_id.
+    """
+    try:
+        from app.services.paywuz_service import PaywuzService
+        status_data = await PaywuzService.get_status(order_id)
+        raw_status = (status_data.get("status") or "").lower()
+        is_paid = raw_status in ("paid", "settled", "settlement", "success", "capture")
+        return {
+            "success": True,
+            "status": raw_status,
+            "is_paid": is_paid,
+            "data": status_data
+        }
+    except Exception as e:
+        logger.error(f"Error checking Paywuz payment status: {e}")
+        raise HTTPException(status_code=400, detail="Gagal memeriksa status pembayaran dari gateway.")
+
+
+@router.post("/payment/webhook")
+async def paywuz_payment_webhook(
+    request: Request,
+    x_paywuz_signature: Optional[str] = Header(None, alias="X-Paywuz-Signature"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Webhook handler untuk menerima notifikasi settlement pembayaran Paywuz.
+    Memverifikasi HMAC-SHA256 signature secara konstan.
+    """
+    from app.services.paywuz_service import verify_webhook_signature
+
+    body_bytes = await request.body()
+    if not x_paywuz_signature or not verify_webhook_signature(body_bytes, x_paywuz_signature):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Tanda tangan webhook Paywuz tidak valid atau tidak disertakan."
+        )
+
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Format JSON tidak valid.")
+
+    order_id = data.get("orderId")
+    tx_status = (data.get("status") or "").lower()
+
+    if order_id and tx_status in ["settled", "paid"]:
+        stmt = select(POSOrder).where(or_(POSOrder.id == order_id, POSOrder.payment_ref == order_id))
+        res = await db.execute(stmt)
+        order = res.scalar_one_or_none()
+        if order and order.status != "COMPLETED":
+            order.status = "PAID"
+            await db.commit()
+
+    return {"status": "success", "received": True}
 
 
 # ==========================================
@@ -445,7 +649,7 @@ async def create_queue_order(
         total_scanned=0,
         total_amount=total_amount,
         payment_method=payload.payment_method.upper(),
-        amount_paid=total_amount if payload.payment_method.upper() == "EXTERNAL_PAID" else 0,
+        amount_paid=total_amount if payload.payment_method.upper() != "UNPAID" else 0,
         cashier_id=str(current_user.get("id") or current_user.get("username")),
         cashier_name=current_user.get("full_name") or current_user.get("username"),
         notes=payload.notes,
@@ -710,9 +914,9 @@ async def receive_external_web_order(
         status="PENDING_SCAN",
         total_items=total_items,
         total_scanned=0,
-        total_amount=payload.total_amount or 0,
+        total_amount=0,
         payment_method=(payload.payment_method or "EXTERNAL_PAID").upper(),
-        amount_paid=payload.total_amount or 0,
+        amount_paid=0,
         cashier_id=f"API_KEY:{api_key.id}",
         cashier_name=api_key.name,
         notes=payload.notes or f"Integrasi via {api_key.name}",
@@ -739,9 +943,9 @@ async def receive_external_web_order(
         )
         db.add(order_item)
 
-    if not payload.total_amount:
-        order.total_amount = calculated_amount
-        order.amount_paid = calculated_amount
+    # Secara otoritatif hitung total order di sisi server dari katalog produk
+    order.total_amount = calculated_amount
+    order.amount_paid = calculated_amount
 
     await db.commit()
 
@@ -898,4 +1102,64 @@ async def get_daily_pos_summary(
         "pending_queue_count": pending_count,
         "by_channel": by_channel if can_view_revenue else None,
         "by_payment": by_payment if can_view_revenue else None
+    }
+
+
+# ==========================================
+# 7. INVENTORY SUMMARY REAL-TIME (DARI ACC SALES)
+# ==========================================
+
+@router.get("/inventory-summary")
+async def get_pos_inventory_summary(
+    current_user: Dict[str, Any] = Depends(require_any_permission("pos:view", "pos:operate", "freezer_sales:view", "ppic_recap:view")),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Rangkuman stok inventaris barang jadi (Finished Goods) real-time:
+    - Menunggu ACC dari Meja Packing (PACKED_VERIFIED, etc.)
+    - Siap Jual di Freezer / Sales (IN_SALES_STOCK, IN_FREEZER_STORAGE) - Hasil Verifikasi ACC Sales
+    - Terjual di Kasir POS (SOLD)
+    - Alokasi Website (stock_online)
+    """
+    p_stmt = select(Product).where(Product.is_active == True).order_by(Product.id.asc())
+    p_res = await db.execute(p_stmt)
+    products = p_res.scalars().all()
+
+    # Query group by lot_type & current_status
+    l_stmt = (
+        select(LotTracking.lot_type, LotTracking.current_status, func.count(LotTracking.lot_qr_code))
+        .group_by(LotTracking.lot_type, LotTracking.current_status)
+    )
+    l_res = await db.execute(l_stmt)
+    lot_counts: Dict[str, Dict[str, int]] = {}
+    for lot_type, status, count in l_res.all():
+        if lot_type not in lot_counts:
+            lot_counts[lot_type] = {}
+        lot_counts[lot_type][status] = count
+
+    summary = []
+    for p in products:
+        counts = lot_counts.get(p.id, {})
+        # Staged from kitchen/packing (menunggu ACC Bagian Sales)
+        staged = sum(counts.get(st, 0) for st in ["PACKED_VERIFIED", "READY_IN_ASSEMBLY_STATION", "IN_PACKING_STATION"])
+        # Verified sales stock (Hasil ACC Sales -> siap jual di POS)
+        verified_stock = sum(counts.get(st, 0) for st in ["IN_SALES_STOCK", "IN_FREEZER_STORAGE"])
+        # Terjual di POS
+        sold = counts.get("SOLD", 0)
+
+        summary.append({
+            "product_id": p.id,
+            "product_name": p.name,
+            "spec": p.spec or "",
+            "price": p.price or 0,
+            "staged_from_kitchen": staged,
+            "verified_sales_stock": verified_stock,
+            "sold_today": sold,
+            "stock_online": p.stock_online or 0,
+            "is_out_of_stock": verified_stock <= 0
+        })
+
+    return {
+        "success": True,
+        "data": summary
     }

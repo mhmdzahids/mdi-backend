@@ -90,12 +90,16 @@ async def seed_rbac_data(session: AsyncSession) -> dict:
     # - 'freezer_sales:edit_price' hanya untuk Super Admin
     view_price_perm = perm_map.get("freezer_sales:view_price")
     edit_price_perm = perm_map.get("freezer_sales:edit_price")
+    delete_perm = perm_map.get("freezer_sales:delete")
     for r in existing_roles.values():
         r_perms = {p.code for p in r.permissions}
         if "freezer_sales:view" in r_perms and view_price_perm and "freezer_sales:view_price" not in r_perms:
             r.permissions.append(view_price_perm)
-        if r.name != "Super Admin" and edit_price_perm and "freezer_sales:edit_price" in r_perms:
-            r.permissions = [p for p in r.permissions if p.code != "freezer_sales:edit_price"]
+        if r.name == "Gudang / Penerima Barang":
+            if edit_price_perm and "freezer_sales:edit_price" not in r_perms:
+                r.permissions.append(edit_price_perm)
+            if delete_perm and "freezer_sales:delete" not in r_perms:
+                r.permissions.append(delete_perm)
 
     await session.flush()
 

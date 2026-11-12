@@ -18,7 +18,8 @@ from ..schemas import (
 )
 from ..rbac import (
     get_effective_user_permissions, check_login_rate_limit,
-    record_login_failure, reset_login_failures, invalidate_user_permission_cache
+    record_login_failure, reset_login_failures, invalidate_user_permission_cache,
+    require_permission
 )
 from ..audit_logger import log_audit_event, extract_client_ip
 
@@ -33,13 +34,15 @@ async def _resolve_user_response(
     """Helper untuk menyusun dictionary profil user lengkap dengan role dan permissions."""
     if user_db:
         roles_list = [r.name for r in user_db.roles]
+        fallback = fallback_acc or ACCOUNTS.get(user_db.username, {})
+        primary_role = fallback.get("role") if fallback and fallback.get("role") else (roles_list[0] if roles_list else "OPERATOR")
         perms = await get_effective_user_permissions(user_db.id, user_db.username, db)
         return {
             "id": user_db.id,
             "username": user_db.username,
             "operator_id": user_db.operator_id or "OPR",
             "full_name": user_db.full_name,
-            "role": roles_list[0] if roles_list else "OPERATOR",
+            "role": primary_role,
             "division": user_db.division or "",
             "default_stage": user_db.default_stage or "PROD_1",
             "default_station": user_db.default_station or "MEAT",
@@ -281,16 +284,24 @@ async def change_password(
 @router.post("/quick-switch", response_model=TokenResponse)
 async def quick_switch_account(
     payload: QuickSwitchRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Dev Mode / Quick Switcher:
     Ganti akun divisi secara instan tanpa input password.
+    Hanya diizinkan di development dan membutuhkan hak Super Admin.
     """
-    if os.getenv("ENVIRONMENT", "").lower() == "production":
+    app_env = os.getenv("APP_ENV", "development").lower()
+    if app_env != "development":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Quick Switcher dinonaktifkan pada lingkungan produksi."
+        )
+    if not current_user.get("is_superadmin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Quick Switcher dinonaktifkan pada lingkungan produksi."
+            detail="Akses ditolak: Quick Switcher hanya dapat diakses oleh Super Admin."
         )
 
     stmt = (
@@ -357,10 +368,13 @@ async def get_my_profile(
 
 
 @router.get("/accounts", response_model=List[AuthUserResponse])
-async def list_available_accounts(db: AsyncSession = Depends(get_db)):
+async def list_available_accounts(
+    current_user: Dict[str, Any] = Depends(require_permission("admin_users:view")),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Daftar akun pegawai seluruh divisi & PIC
-    untuk kebutuhan Dev Mode switcher dan demo.
+    Daftar akun pegawai seluruh divisi & PIC.
+    Memerlukan hak akses autentikasi dengan izin admin_users:view.
     """
     # 1. Coba ambil dari DB SQL
     stmt = (

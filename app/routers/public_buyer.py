@@ -6,6 +6,8 @@ khusus untuk website buyer e-commerce eksternal yang diamankan menggunakan X-API
 
 import os
 import re
+import hashlib
+import secrets
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
@@ -29,7 +31,7 @@ async def verify_buyer_api_key(
     """
     Middleware / Security Dependency untuk memeriksa header X-API-Key.
     Menerima API Key yang cocok dengan BUYER_CLIENT_API_KEY di .env
-    atau API Key aktif yang tersimpan di pos_api_keys database.
+    atau API Key aktif yang tersimpan di pos_api_keys database menggunakan hash SHA-256 (VULN-06 & VULN-07).
     """
     if not api_key:
         raise HTTPException(
@@ -39,17 +41,21 @@ async def verify_buyer_api_key(
         )
 
     expected_buyer_key = os.getenv("BUYER_CLIENT_API_KEY", "mdi_live_9f8e7d6c5b4a321e0f")
-    if api_key == expected_buyer_key:
+    if expected_buyer_key and secrets.compare_digest(api_key, expected_buyer_key):
         return api_key
 
-    # Cek apakah ada key terdaftar di tabel pos_api_keys
-    res = await db.execute(select(POSApiKey).where(POSApiKey.is_active == True))
-    active_keys = res.scalars().all()
-    for k in active_keys:
-        if api_key.startswith(k.key_prefix):
-            k.last_used_at = datetime.utcnow()
-            await db.commit()
-            return api_key
+    # Cek apakah ada key terdaftar di tabel pos_api_keys via hash SHA-256 (bukan prefix matching)
+    key_hash = hashlib.sha256(api_key.strip().encode("utf-8")).hexdigest()
+    stmt = select(POSApiKey).where(
+        POSApiKey.key_hash == key_hash,
+        POSApiKey.is_active == True
+    )
+    res = await db.execute(stmt)
+    matched_key = res.scalar_one_or_none()
+    if matched_key:
+        matched_key.last_used_at = datetime.utcnow()
+        await db.commit()
+        return api_key
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -69,6 +75,8 @@ class ValidateVoucherRequest(BaseModel):
 
 class ReleaseVoucherRequest(BaseModel):
     code: str
+    order_id: Optional[str] = Field(None, description="Nomor order yang dibatalkan / checkout gagal")
+    reason: Optional[str] = Field(None, description="Alasan pengembalian kuota")
 
 
 # ==========================================
@@ -114,6 +122,8 @@ async def get_buyer_catalog(
             "id": p.id,
             "name": p.name,
             "sku": p.sku or p.id,
+            "spec": p.spec,
+            "description": p.description,
             "price": final_price,
             "original_price": orig_price,
             "is_discount": bool(p.is_discount),
@@ -315,22 +325,40 @@ async def release_buyer_voucher(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Rollback kuota kupon (TUGAS 2.2) jika pesanan buyer batal atau checkout kedaluwarsa.
+    Rollback kuota kupon jika pesanan buyer batal atau checkout kedaluwarsa.
+    Memerlukan validasi order_id untuk mencegah eksploitasi rollback sembarangan (VULN-10).
     """
     code = payload.code.strip().upper()
+    if not payload.order_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Validasi gagal: order_id wajib disertakan untuk melakukan rollback kuota voucher."
+        )
+
     stmt = select(Voucher).where(Voucher.code == code).with_for_update()
     res = await db.execute(stmt)
     voucher = res.scalar_one_or_none()
 
-    if voucher and voucher.used_count > 0:
-        voucher.used_count -= 1
-        voucher.updated_at = datetime.utcnow()
-        await db.commit()
-        await db.refresh(voucher)
+    if not voucher:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Voucher dengan kode '{code}' tidak ditemukan."
+        )
+
+    if voucher.used_count <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Voucher '{code}' tidak memiliki kuota terpakai untuk dikembalikan."
+        )
+
+    voucher.used_count -= 1
+    voucher.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(voucher)
 
     return {
         "success": True,
-        "message": f"Kuota voucher {code} berhasil dikembalikan."
+        "message": f"Kuota voucher {code} untuk pesanan {payload.order_id} berhasil dikembalikan."
     }
 
 

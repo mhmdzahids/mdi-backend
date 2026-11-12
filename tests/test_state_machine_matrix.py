@@ -175,19 +175,18 @@ async def test_mode_1x_scan_out_directly_from_printed(async_session: AsyncSessio
     async_session.add(lot)
     await async_session.commit()
 
-    # 1. Coba Scan In di Mode 1x untuk barang sendiri -> info bahwa scan in tidak wajib
-    res_in = await execute_scan_transition(
-        db=async_session,
-        lot_code="AD-20261025-001",
-        operator_station_id="MEAT_STATION",
-        user_id="OPR-DAGING",
-        user_role="OPERATOR_DAGING",
-        intent="SCAN_IN"
-    )
-    assert res_in["success"] is True
-    assert "Mode 1x aktif" in res_in["message"]
-    # Status tetap belum discan
-    assert res_in["normalized_status"] == "DICETAK"
+    # 1. Coba Scan In di Mode 1x untuk barang sendiri -> ditolak dengan arahan scan out
+    with pytest.raises(HTTPException) as exc_info:
+        await execute_scan_transition(
+            db=async_session,
+            lot_code="AD-20261025-001",
+            operator_station_id="MEAT_STATION",
+            user_id="OPR-DAGING",
+            user_role="OPERATOR_DAGING",
+            intent="SCAN_IN"
+        )
+    assert exc_info.value.status_code == 400
+    assert "tidak bisa di-scan in" in exc_info.value.detail
 
     # 2. Scan Out langsung -> Berhasil ke transit
     res_out = await execute_scan_transition(

@@ -5,7 +5,8 @@ import json
 import base64
 import time
 import bcrypt
-from typing import Optional, Dict, Any
+import secrets
+from typing import Optional, Dict, Any, List
 from fastapi import Security, HTTPException, status, Depends
 from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
@@ -333,7 +334,8 @@ def b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s.encode("utf-8"))
 
 
-def create_token(user_data: Dict[str, Any], expires_in_seconds: int = 86400 * 30) -> str:
+def create_token(user_data: Dict[str, Any], expires_in_seconds: int = 86400) -> str:
+    """Buat token JWT akses dengan masa aktif standar 24 jam (86400 detik)."""
     payload = {
         "user_id": user_data.get("id"),
         "sub": user_data["username"],
@@ -381,6 +383,43 @@ def verify_token(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+# Rate Limiter & Lockout untuk PIN Supervisor (VULN-13)
+_PIN_FAILURES: Dict[str, List[float]] = {}
+MAX_PIN_ATTEMPTS = 5
+PIN_LOCKOUT_WINDOW_SECONDS = 300  # 5 menit
+
+
+def verify_supervisor_pin(submitted_pin: Optional[str], client_id: str = "GLOBAL") -> bool:
+    """
+    Verifikasi PIN Supervisor dengan constant-time comparison (secrets.compare_digest)
+    dan pembatasan percobaan gagal (brute-force rate limiting).
+    """
+    now = time.time()
+    failures = _PIN_FAILURES.get(client_id, [])
+    active_failures = [t for t in failures if (now - t) < PIN_LOCKOUT_WINDOW_SECONDS]
+    _PIN_FAILURES[client_id] = active_failures
+
+    if len(active_failures) >= MAX_PIN_ATTEMPTS:
+        time_rem = int(PIN_LOCKOUT_WINDOW_SECONDS - (now - active_failures[0]))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Terlalu banyak percobaan PIN salah. Akses PIN dikunci sementara ({max(time_rem, 1)} detik)."
+        )
+
+    expected_pin = os.getenv("SUPERVISOR_PIN", "8888")
+    if not submitted_pin:
+        _PIN_FAILURES[client_id].append(now)
+        return False
+
+    is_valid = secrets.compare_digest(str(submitted_pin).strip(), str(expected_pin).strip())
+    if not is_valid:
+        _PIN_FAILURES[client_id].append(now)
+        return False
+
+    _PIN_FAILURES.pop(client_id, None)
+    return True
+
+
 # Security Header Schemes
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -394,16 +433,45 @@ async def get_current_user(
     if credentials and credentials.credentials:
         payload = verify_token(credentials.credentials)
         if payload:
+            # VULN-11: Verifikasi token expiration dan status aktif user di DB
+            from .database import AsyncSessionLocal
+            from .models import User
+            from sqlalchemy import select, or_
+
+            user_id = payload.get("user_id")
+            username = payload.get("sub")
+            if user_id or username:
+                try:
+                    async with AsyncSessionLocal() as session:
+                        cond = (User.id == user_id) if user_id else (User.username == username)
+                        res = await session.execute(select(User).where(cond))
+                        db_user = res.scalar_one_or_none()
+                        if db_user:
+                            if not db_user.is_active:
+                                raise HTTPException(
+                                    status_code=status.HTTP_401_UNAUTHORIZED,
+                                    detail="Akun Anda telah dinonaktifkan oleh Administrator.",
+                                    headers={"WWW-Authenticate": "Bearer"}
+                                )
+                            payload["is_active"] = db_user.is_active
+                            payload["is_superadmin"] = db_user.is_superadmin
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass
+
             return payload
 
-    # 2. Cek API Key jika ada
-    if api_key and api_key == API_KEY:
+    # 2. Cek API Key jika ada menggunakan constant-time secrets.compare_digest (VULN-07)
+    if api_key and secrets.compare_digest(api_key, API_KEY):
         return {
             "sub": "api_client",
             "operator_id": "SYSTEM_API",
             "full_name": "Automated Client",
             "role": "STAKEHOLDER",
-            "division": "System API"
+            "division": "System API",
+            "is_superadmin": True,
+            "is_active": True
         }
 
     # Jika keduanya tidak valid
@@ -426,19 +494,26 @@ def require_role(allowed_roles: list):
 
 
 def is_global_supervisor(user: Dict[str, Any]) -> bool:
+    """
+    Evaluasi hak akses Supervisor Global / PPIC.
+    Menghilangkan substring matching heuristics ('AYU', 'SUPER', 'PPIC') untuk mencegah privilege escalation (VULN-05).
+    """
     if user.get("is_superadmin") is True:
         return True
     sub = (user.get("sub") or user.get("username") or "").lower()
     op_id = (user.get("operator_id") or "").upper()
+    role = (user.get("role") or "").upper()
     div = (user.get("division") or "").upper()
-    return (
-        sub in ["supervisor", "ppic_ayu", "ayu", "superadmin"]
-        or "YOSI" in op_id
-        or "AYU" in op_id
-        or "SUPER" in op_id
-        or "PPIC" in div
-        or "SUPERVISOR" in div
-    )
+
+    if role in ["SUPERADMIN", "SUPERVISOR", "PPIC"]:
+        return True
+    if sub in ["supervisor", "ppic_ayu", "superadmin", "admin"]:
+        return True
+    if op_id in ["STK-YOSI", "PPIC-AYU", "SYSTEM_API", "SUPERADMIN"]:
+        return True
+    if div in ["SUPERVISOR & PPIC", "PPIC", "SUPERADMIN", "SYSTEM API"]:
+        return True
+    return False
 
 
 def require_ppic():
@@ -458,6 +533,7 @@ def require_division(allowed_keywords: list):
     Validasi akses divisi:
     Supervisor Global / PPIC diizinkan di seluruh divisi.
     Operator dan PIC Divisi hanya diizinkan untuk divisi yang sesuai.
+    Menggunakan pencocokan token dan pemetaan divisi eksak, bukan substring longgar (VULN-05).
     """
     async def division_checker(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
         if is_global_supervisor(current_user):
@@ -465,8 +541,37 @@ def require_division(allowed_keywords: list):
 
         op_id = (current_user.get("operator_id") or "").upper()
         div = (current_user.get("division") or "").upper()
-        sub = (current_user.get("sub") or "").upper()
-        if not any(k.upper() in op_id or k.upper() in div or k.upper() in sub for k in allowed_keywords):
+        sub = (current_user.get("sub") or current_user.get("username") or "").lower()
+
+        division_keywords_map = {
+            "DAGING": ["DIVISI DAGING (GILING & MIXER)", "DAGING", "GILING", "MEAT", "OPR-DAGING", "PIC-DAGING"],
+            "BUMBU": ["DIVISI BUMBU RACIK", "BUMBU", "SEASONING", "OPR-BUMBU", "PIC-BUMBU"],
+            "KULIT": ["DIVISI KULIT DIMSUM", "KULIT", "WRAPPER", "OPR-KULIT", "PIC-KULIT"],
+            "SAOS": ["DIVISI SAOS", "SAOS", "SAUCE", "OPR-SAOS", "PIC-SAOS"],
+            "CETAK": ["DIVISI CETAK & ASSEMBLY", "CETAK", "ASSEMBLY", "PROD_2", "OPR-CETAK", "PIC-CETAK"],
+            "ASSEMBLY": ["DIVISI CETAK & ASSEMBLY", "CETAK", "ASSEMBLY", "PROD_2", "OPR-CETAK", "PIC-CETAK"],
+            "PACKING": ["DIVISI PACKING & FINISHING", "PACKING", "FINISHING", "OPR-PACKING", "PIC-PACKING"],
+            "FINISHING": ["DIVISI PACKING & FINISHING", "PACKING", "FINISHING", "OPR-PACKING", "PIC-PACKING"],
+            "GUDANG": ["GUDANG FREEZER & SALES", "GUDANG", "FREEZER", "OPR-GUDANG", "PIC-GUDANG"],
+            "SALES": ["GUDANG FREEZER & SALES", "SALES", "DISTRIBUTION", "KASIR", "POS"]
+        }
+
+        matched = False
+        for kw in allowed_keywords:
+            kw_up = kw.upper()
+            allowed_tokens = division_keywords_map.get(kw_up, [kw_up])
+            if op_id in allowed_tokens or div in allowed_tokens:
+                matched = True
+                break
+            acc = ACCOUNTS.get(sub)
+            if acc:
+                acc_div = (acc.get("division") or "").upper()
+                acc_op = (acc.get("operator_id") or "").upper()
+                if acc_div in allowed_tokens or acc_op in allowed_tokens:
+                    matched = True
+                    break
+
+        if not matched:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Akses ditolak: Operasi ini hanya untuk divisi {', '.join(allowed_keywords)}."

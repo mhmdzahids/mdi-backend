@@ -8,6 +8,9 @@ import os
 import io
 import uuid
 import json
+import logging
+import threading
+import urllib.request
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
@@ -16,16 +19,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from PIL import Image
 
+logger = logging.getLogger(__name__)
+
 from ..database import get_db
 from ..models import Product
 from ..auth import get_current_user
-from ..rbac import require_permission, get_effective_user_permissions
+from ..rbac import require_permission, require_any_permission, get_effective_user_permissions
 from ..audit_logger import log_audit_event
 
 router = APIRouter(prefix="/products", tags=["Katalog Produk POS"])
 
 UPLOAD_DIR = "uploads/products"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+def _notify_buyer_webhook():
+    webhook_url = os.getenv("BUYER_SYNC_WEBHOOK_URL", "http://127.0.0.1:5000/api/products/sync")
+    api_key = os.getenv("BUYER_SYNC_API_KEY", "mdi_live_9f8e7d6c5b4a321e0f")
+    try:
+        req = urllib.request.Request(webhook_url, data=b"", headers={"X-API-Key": api_key}, method="POST")
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            pass
+    except Exception:
+        pass
+
+
+def trigger_buyer_sync():
+    """Fire-and-forget sync notification to buyer storefront."""
+    try:
+        t = threading.Thread(target=_notify_buyer_webhook, daemon=True)
+        t.start()
+    except Exception:
+        pass
 
 
 class ProductResponse(BaseModel):
@@ -143,7 +168,7 @@ def _cleanup_file(rel_path: Optional[str]):
 @router.get("", response_model=List[ProductResponse])
 async def list_products(
     db: AsyncSession = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(require_permission("freezer_sales:view"))
+    current_user: Dict[str, Any] = Depends(require_any_permission("freezer_sales:view", "pos:operate", "pos:view"))
 ):
     """
     Daftar seluruh produk katalog POS.
@@ -225,6 +250,7 @@ async def create_product(
     db.add(new_prod)
     await db.commit()
     await db.refresh(new_prod)
+    trigger_buyer_sync()
 
     await log_audit_event(
         db=db,
@@ -381,6 +407,7 @@ async def update_product(
     product.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(product)
+    trigger_buyer_sync()
 
     can_view = await user_can_view_price(current_user, db)
     return to_product_response(product, can_view)
@@ -443,6 +470,7 @@ async def update_product_discount(
     product.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(product)
+    trigger_buyer_sync()
 
     await log_audit_event(
         db=db,
@@ -512,7 +540,11 @@ async def upload_product_image(
         raw_img = Image.open(io.BytesIO(content))
         raw_img.load()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Gagal memproses file gambar: {str(e)}")
+        logger.error(f"Gagal memproses file gambar produk: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Gagal memproses file gambar produk. Pastikan file gambar valid."
+        )
 
     # Normalisasi format & strip EXIF
     # Convert RGBA atau P ke RGB untuk konsistensi WebP murni
@@ -558,6 +590,7 @@ async def upload_product_image(
     product.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(product)
+    trigger_buyer_sync()
 
     # 8. Catat ke Audit Log
     user_id = current_user.get("user_id")
@@ -598,6 +631,7 @@ async def delete_product_image(
     product.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(product)
+    trigger_buyer_sync()
 
     user_id = current_user.get("user_id")
     actor_name = current_user.get("full_name") or current_user.get("username") or "SYSTEM"
@@ -614,3 +648,45 @@ async def delete_product_image(
 
     can_view = await user_can_view_price(current_user, db)
     return to_product_response(product, can_view)
+
+
+@router.delete("/{product_id}")
+async def delete_product(
+    product_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_permission("freezer_sales:delete"))
+):
+    """
+    Hapus produk dari katalog master (Memerlukan izin 'freezer_sales:delete').
+    """
+    res = await db.execute(select(Product).where(Product.id == product_id))
+    product = res.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produk tidak ditemukan.")
+
+    user_id = current_user.get("user_id")
+    actor_name = current_user.get("full_name") or current_user.get("username") or "SYSTEM"
+    prod_name = product.name
+
+    # Bersihkan file foto jika ada
+    _cleanup_file(product.image_url)
+    _cleanup_file(product.thumbnail_url)
+
+    await db.delete(product)
+    await db.commit()
+    trigger_buyer_sync()
+
+    await log_audit_event(
+        db=db,
+        aksi="Hapus produk",
+        objek_tipe="PRODUCT",
+        objek_id=product_id,
+        ringkasan=f"Hapus produk '{prod_name}' ({product_id})",
+        user_id=user_id,
+        nama_user=actor_name,
+        request=request
+    )
+
+    return {"success": True, "message": f"Produk '{prod_name}' berhasil dihapus."}
+
