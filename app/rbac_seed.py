@@ -95,10 +95,10 @@ async def seed_rbac_data(session: AsyncSession) -> dict:
         r_perms = {p.code for p in r.permissions}
         if "freezer_sales:view" in r_perms and view_price_perm and "freezer_sales:view_price" not in r_perms:
             r.permissions.append(view_price_perm)
-        if r.name == "Gudang / Penerima Barang":
+        if r.name in ("Gudang / Penerima Barang", "PIC Kasir"):
             if edit_price_perm and "freezer_sales:edit_price" not in r_perms:
                 r.permissions.append(edit_price_perm)
-            if delete_perm and "freezer_sales:delete" not in r_perms:
+            if r.name == "Gudang / Penerima Barang" and delete_perm and "freezer_sales:delete" not in r_perms:
                 r.permissions.append(delete_perm)
 
     await session.flush()

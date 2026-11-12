@@ -542,11 +542,11 @@ SYSTEM_ROLE_TEMPLATES: Dict[str, Dict[str, Any]] = {
         ]
     },
     "PIC Kasir": {
-        "description": "Supervisor kasir, rekap omzet harian POS, rekonsiliasi kas (Z-Report), dan audit penjualan lintas channel.",
+        "description": "Supervisor kasir, rekap omzet harian POS, rekonsiliasi kas (Z-Report), audit penjualan lintas channel, serta wewenang pengaturan harga dan diskon produk.",
         "is_system": True,
         "permissions": [
             "pos:view", "pos:operate", "pos:manage_orders", "pos:view_revenue",
-            "freezer_sales:view_price",
+            "freezer_sales:view", "freezer_sales:update", "freezer_sales:view_price", "freezer_sales:edit_price",
             "profile:view", "profile:change_password"
         ]
     },
