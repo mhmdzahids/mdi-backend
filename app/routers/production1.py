@@ -467,7 +467,7 @@ async def produce_batch_unified(
                 lot_qr_code=lot_code,
                 plan_id=payload.plan_id,
                 lot_type="ADONAN",
-                current_status="READY_IN_MEAT_MIXING_STATION",
+                current_status="PRINTED_PENDING_STOCK_IN",
                 current_station="MEAT_MIXING_STATION",
                 quantity=payload.dough_yield_kg,
                 unit="KG"
@@ -1925,7 +1925,7 @@ async def generate_daily_lots_all(
                     plan_id=plan_id,
                     batch_no=1,
                     lot_type="ADONAN",
-                    current_status="READY_IN_MEAT_MIXING_STATION",
+                    current_status="PRINTED_PENDING_STOCK_IN",
                     current_station="MEAT_MIXING_STATION",
                     quantity=15.0,
                     unit="KG"
@@ -2534,7 +2534,7 @@ async def add_production_batch(
                     plan_id=plan_id,
                     batch_no=next_batch_no,
                     lot_type="ADONAN",
-                    current_status="READY_IN_MEAT_MIXING_STATION",
+                    current_status="PRINTED_PENDING_STOCK_IN",
                     current_station="MEAT_MIXING_STATION",
                     quantity=15.0,
                     unit="KG"
@@ -3502,7 +3502,18 @@ async def get_daily_recap(
             
             printed_count = sum(1 for l in lots if "PRINTED" in (l.current_status or ""))
             transit_count = sum(1 for l in lots if "TRANSIT" in (l.current_status or ""))
-            ready_or_delivered = sum(1 for l in lots if "READY" in (l.current_status or "") or "STOCK" in (l.current_status or "") or "IN_" in (l.current_status or ""))
+            ready_or_delivered = sum(
+                1 for l in lots
+                if (l.current_status or "") not in ("VOID", "")
+                and "PRINTED" not in (l.current_status or "")
+                and "TRANSIT" not in (l.current_status or "")
+                and (
+                    "READY" in (l.current_status or "")
+                    or "STOCK" in (l.current_status or "")
+                    or "IN_" in (l.current_status or "")
+                    or (l.current_status or "") in ("PACKED_VERIFIED", "DI_STOK", "DITERIMA")
+                )
+            )
             consumed_count = sum(1 for l in lots if l.current_status == "CONSUMED")
             void_count = sum(1 for l in lots if (l.current_status or "").upper() == "VOID")
 
@@ -3519,7 +3530,16 @@ async def get_daily_recap(
             completed_qty = sum(
                 float(l.quantity or 0)
                 for l in lots
-                if "READY" in (l.current_status or "") or "STOCK" in (l.current_status or "") or "IN_" in (l.current_status or "") or l.current_status == "CONSUMED"
+                if (l.current_status or "") not in ("VOID", "")
+                and "PRINTED" not in (l.current_status or "")
+                and "TRANSIT" not in (l.current_status or "")
+                and (
+                    "READY" in (l.current_status or "")
+                    or "STOCK" in (l.current_status or "")
+                    or "IN_" in (l.current_status or "")
+                    or l.current_status == "CONSUMED"
+                    or (l.current_status or "") in ("PACKED_VERIFIED", "DI_STOK", "DITERIMA")
+                )
             )
 
             rej_sum = sum(n.reject_count or 0 for n in div_notes)
@@ -3815,7 +3835,18 @@ async def get_daily_recap(
         # Hitung status
         printed_count = sum(1 for l in lots if "PRINTED" in (l.current_status or ""))
         transit_count = sum(1 for l in lots if "TRANSIT" in (l.current_status or ""))
-        ready_or_delivered = sum(1 for l in lots if "READY" in (l.current_status or "") or "STOCK" in (l.current_status or "") or "IN_" in (l.current_status or ""))
+        ready_or_delivered = sum(
+            1 for l in lots
+            if (l.current_status or "") not in ("VOID", "")
+            and "PRINTED" not in (l.current_status or "")
+            and "TRANSIT" not in (l.current_status or "")
+            and (
+                "READY" in (l.current_status or "")
+                or "STOCK" in (l.current_status or "")
+                or "IN_" in (l.current_status or "")
+                or (l.current_status or "") in ("PACKED_VERIFIED", "DI_STOK", "DITERIMA")
+            )
+        )
         consumed_count = sum(1 for l in lots if l.current_status == "CONSUMED")
         void_count = sum(1 for l in lots if (l.current_status or "").upper() == "VOID")
 
@@ -3832,7 +3863,16 @@ async def get_daily_recap(
         completed_qty = sum(
             float(l.quantity or 0)
             for l in lots
-            if "READY" in (l.current_status or "") or "STOCK" in (l.current_status or "") or "IN_" in (l.current_status or "") or l.current_status == "CONSUMED"
+            if (l.current_status or "") not in ("VOID", "")
+            and "PRINTED" not in (l.current_status or "")
+            and "TRANSIT" not in (l.current_status or "")
+            and (
+                "READY" in (l.current_status or "")
+                or "STOCK" in (l.current_status or "")
+                or "IN_" in (l.current_status or "")
+                or l.current_status == "CONSUMED"
+                or (l.current_status or "") in ("PACKED_VERIFIED", "DI_STOK", "DITERIMA")
+            )
         )
 
         return {
