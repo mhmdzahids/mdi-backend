@@ -124,6 +124,27 @@ class CustodyTransferLog(Base):
     lot = relationship("LotTracking", back_populates="custody_logs")
 
 
+# 4b. MATERIAL USAGE LOG (Untuk Pemakaian Bumbu / Kulit dengan model 3-metrik: Stok, Digunakan, Sisa)
+class MaterialUsage(Base):
+    __tablename__ = "material_usages"
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    lot_qr_code = Column(String(100), ForeignKey("lot_trackings.lot_qr_code"), nullable=False, index=True)
+    material_type = Column(String(20), default="BUMBU", nullable=False, index=True) # 'BUMBU', 'KULIT', dll.
+    station_id = Column(String(50), default="MEAT_STATION", nullable=False) # 'MEAT_STATION', dll.
+    usage_date = Column(Date, nullable=False, index=True) # Tanggal penggunaan untuk filter per hari
+    initial_quantity = Column(Numeric(10, 2), nullable=False) # Stok Awal sebelum digunakan (Kresek)
+    quantity_used = Column(Numeric(10, 2), nullable=False) # Kuantitas Digunakan (Kresek)
+    remaining_quantity = Column(Numeric(10, 2), nullable=False) # Sisa setelah penggunaan (Kresek)
+    unit = Column(String(20), default="KRESEK", nullable=False) # Satuan: KRESEK
+    remaining_action = Column(String(50), default="STORE_IN_ROOM", nullable=False) # 'STORE_IN_ROOM', 'RETURN_TO_FRONTDESK'
+    notes = Column(Text, nullable=True) # Catatan operasional
+    operator_id = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    lot = relationship("LotTracking", backref="material_usages")
+
+
 # 5. DISCREPANCY LOGS
 class DiscrepancyLog(Base):
     __tablename__ = "discrepancy_logs"

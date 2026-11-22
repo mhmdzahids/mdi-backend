@@ -101,30 +101,45 @@ def get_station_for_lot(lot: LotTracking) -> str:
 
 def get_target_station_for_lot(lot: LotTracking, origin_station: str) -> str:
     """
-    Menentukan stasiun tujuan kiriman berdasarkan tipe lot.
+    Menentukan stasiun tujuan kiriman berdasarkan tipe lot dan status transit.
     - Saos -> FINISHING_STATION (Packing)
     - Kulit -> ASSEMBLY_STATION (Cetak)
     - Adonan -> ASSEMBLY_STATION (Cetak)
     - Bumbu -> MEAT_STATION (Giling/Mixer)
     - Daging -> MEAT_STATION (Mixer) / ASSEMBLY_STATION
     """
+    cur_status = (lot.current_status or "").upper().strip()
+    if cur_status.startswith("IN_TRANSIT_TO_"):
+        dest = cur_status.replace("IN_TRANSIT_TO_", "")
+        if "MEAT" in dest:
+            return "MEAT_STATION"
+        if "SEASONING" in dest or "BUMBU" in dest:
+            return "SEASONING_STATION"
+        if "WRAPPER" in dest or "KULIT" in dest:
+            return "WRAPPER_STATION"
+        if "SAUCE" in dest or "SAOS" in dest:
+            return "SAUCE_STATION"
+        if "ASSEMBLY" in dest or "CETAK" in dest:
+            return "ASSEMBLY_STATION"
+        if "FINISHING" in dest or "PACKING" in dest:
+            return "FINISHING_STATION"
+        return normalize_station_id(dest)
+
     qr = (lot.lot_qr_code or "").upper()
     lot_type = (lot.lot_type or "").upper()
 
-    if lot_type == "SAOS" or qr.startswith("SS-") or qr.startswith("SA-") or qr.startswith("IN-SA-"):
+    if lot_type == "SAOS" or qr.startswith("SS-") or qr.startswith("SA-") or qr.startswith("IN-SA-") or qr.startswith("OUT-SA-"):
+        return "FINISHING_STATION" if origin_station == "SAUCE_STATION" else "SAUCE_STATION"
+    if lot_type == "KEMASAN" or qr.startswith("KM-") or qr.startswith("IN-KM-") or qr.startswith("OUT-KM-"):
         return "FINISHING_STATION"
-    if lot_type == "KEMASAN" or qr.startswith("KM-") or qr.startswith("IN-KM-"):
-        return "FINISHING_STATION"
-    if lot_type == "KULIT" or qr.startswith("KL-") or qr.startswith("IN-KL-"):
-        return "ASSEMBLY_STATION"
+    if lot_type == "KULIT" or qr.startswith("KL-") or qr.startswith("IN-KL-") or qr.startswith("OUT-KL-"):
+        return "ASSEMBLY_STATION" if origin_station == "WRAPPER_STATION" else "WRAPPER_STATION"
     if lot_type == "ADONAN" or qr.startswith("AD-") or qr.startswith("IN-AD-"):
         return "ASSEMBLY_STATION"
-    if lot_type == "BUMBU" or qr.startswith("BM-") or qr.startswith("SP-") or qr.startswith("IN-BM-"):
+    if lot_type == "BUMBU" or qr.startswith("BM-") or qr.startswith("SP-") or qr.startswith("IN-BM-") or qr.startswith("OUT-BM-"):
+        return "MEAT_STATION" if origin_station == "SEASONING_STATION" else "SEASONING_STATION"
+    if qr.startswith("IN-DG-") or qr.startswith("OUT-DG-") or lot_type == "DAGING" or qr.startswith("DG-") or qr.startswith("MEAT-"):
         return "MEAT_STATION"
-    if qr.startswith("IN-DG-"):
-        return "MEAT_STATION"
-    if lot_type == "DAGING" or qr.startswith("DG-") or qr.startswith("MEAT-"):
-        return "SEASONING_STATION"
     return STATION_METADATA.get(origin_station, {}).get("target", "ASSEMBLY_STATION")
 
 
@@ -362,7 +377,26 @@ async def execute_scan_transition(
                 new_status = "IN_MEAT_MIXING_STATION"
                 lot.current_station = "MEAT_STATION"
                 action_type = "SCAN_IN"
-                feedback_message = f"Bumbu diterima: {lot.lot_qr_code} telah diterima di Mixer."
+                label_bahan = "Daging" if lot_type == "DAGING" else "Bumbu"
+                feedback_message = f"{label_bahan} diterima: {lot.lot_qr_code} telah diterima di Giling & Mix."
+                semantic_variant = "success"
+            elif target_st == "SEASONING_STATION":
+                new_status = "READY_IN_SEASONING_STATION"
+                lot.current_station = "SEASONING_STATION"
+                action_type = "SCAN_IN"
+                feedback_message = f"Bahan diterima: {lot.lot_qr_code} telah diterima di Stasiun Bumbu."
+                semantic_variant = "success"
+            elif target_st == "WRAPPER_STATION":
+                new_status = "READY_IN_WRAPPER_STATION"
+                lot.current_station = "WRAPPER_STATION"
+                action_type = "SCAN_IN"
+                feedback_message = f"Bahan diterima: {lot.lot_qr_code} telah diterima di Stasiun Kulit Pangsit."
+                semantic_variant = "success"
+            elif target_st == "SAUCE_STATION":
+                new_status = "READY_IN_SAUCE_STATION"
+                lot.current_station = "SAUCE_STATION"
+                action_type = "SCAN_IN"
+                feedback_message = f"Bahan diterima: {lot.lot_qr_code} telah diterima di Stasiun Saos."
                 semantic_variant = "success"
             elif target_st == "FINISHING_STATION":
                 new_status = "IN_FINISHING_STATION"
@@ -371,14 +405,14 @@ async def execute_scan_transition(
                 feedback_message = f"Diterima: Bahan telah diterima di {target_name}."
                 semantic_variant = "success"
             else:
-                new_status = "DITERIMA"
+                new_status = f"READY_IN_{target_st}"
                 lot.current_station = target_st
                 action_type = "SCAN_IN"
                 feedback_message = f"Diterima: Bahan telah diterima di {target_name}."
                 semantic_variant = "success"
 
-        # Kasus B: Barang Transit Sudah Diterima Sebelumnya (Idempoten)
-        elif current_norm == "DITERIMA" and op_st == target_st:
+        # Kasus B: Barang Transit / Stok Sudah Diterima Sebelumnya di Stasiun Ini (Idempoten)
+        elif (current_norm in ["DITERIMA", "DI_STOK"]) and (op_st == target_st or lot.current_station == op_st):
             return {
                 "success": True,
                 "is_duplicate": True,
@@ -386,9 +420,9 @@ async def execute_scan_transition(
                 "action": "SCAN_IN",
                 "previous_status": lot.current_status,
                 "current_status": lot.current_status,
-                "normalized_status": "DITERIMA",
+                "normalized_status": current_norm,
                 "mode": mode,
-                "message": "Sudah diterima",
+                "message": "Sudah diterima / masuk stok",
                 "semantic_variant": "info",
                 "can_undo": False
             }

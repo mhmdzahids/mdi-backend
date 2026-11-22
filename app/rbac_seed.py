@@ -152,8 +152,8 @@ async def seed_rbac_data(session: AsyncSession) -> dict:
         "pic_daging": ["Produksi Giling & Mix", "Viewer"],
         "opr_bumbu": ["Produksi Bumbu"],
         "pic_bumbu": ["Produksi Bumbu", "Viewer"],
-        "opr_kulit": ["Produksi Kulit Dimsum"],
-        "pic_kulit": ["Produksi Kulit Dimsum", "Viewer"],
+        "opr_kulit": ["Produksi Kulit Pangsit"],
+        "pic_kulit": ["Produksi Kulit Pangsit", "Viewer"],
         "opr_saos": ["Produksi Saos"],
         "pic_saos": ["Produksi Saos", "Viewer"],
         "opr_cetak": ["Meja Cetak"],
@@ -167,7 +167,7 @@ async def seed_rbac_data(session: AsyncSession) -> dict:
         "ppic_ayu": ["PPIC"],
         "supervisor": [
             "PPIC", "Viewer", "Produksi Giling & Mix", "Produksi Bumbu",
-            "Produksi Kulit Dimsum", "Produksi Saos", "Meja Cetak",
+            "Produksi Kulit Pangsit", "Produksi Saos", "Meja Cetak",
             "Meja Packing", "Gudang / Penerima Barang"
         ]
     }

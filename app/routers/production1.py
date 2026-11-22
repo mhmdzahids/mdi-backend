@@ -45,7 +45,8 @@ from ..models import (
     ScanEvent,
     SupplierInbound,
     SupplierOutbound,
-    DivisionDailyNote
+    DivisionDailyNote,
+    MaterialUsage
 )
 from ..schemas import (
     GenerateByGilinganRequest,
@@ -1954,7 +1955,7 @@ async def generate_daily_lots_all(
                     lot_type="BUMBU",
                     current_status="PRINTED_PENDING_STOCK_IN",
                     current_station="SEASONING_STATION",
-                    quantity=1.0,
+                    quantity=20.0,
                     unit="KARUNG"
                 )
                 db.add(lot)
@@ -2563,7 +2564,7 @@ async def add_production_batch(
                     lot_type="BUMBU",
                     current_status="PRINTED_PENDING_STOCK_IN",
                     current_station="SEASONING_STATION",
-                    quantity=1.0,
+                    quantity=20.0,
                     unit="KARUNG"
                 )
                 db.add(lot)
@@ -2985,6 +2986,64 @@ async def create_supplier_outbound(
             created_at=datetime.utcnow()
         )
         db.add(outbound)
+
+        # Jika dikirim ke stasiun produksi, buat LotTracking berstatus IN_TRANSIT
+        # sehingga wajib di-scan in oleh stasiun bersangkutan
+        target_norm = normalize_station_id(payload.target_station) if payload.target_station else None
+        if target_norm and target_norm not in ["NONE", "UMUM"]:
+            transit_status = (
+                "IN_TRANSIT_TO_MEAT_MIXING" if target_norm == "MEAT_STATION"
+                else "IN_TRANSIT_TO_SEASONING" if target_norm == "SEASONING_STATION"
+                else "IN_TRANSIT_TO_WRAPPER" if target_norm == "WRAPPER_STATION"
+                else "IN_TRANSIT_TO_SAUCE" if target_norm == "SAUCE_STATION"
+                else "IN_TRANSIT_TO_ASSEMBLY" if target_norm == "ASSEMBLY_STATION"
+                else "IN_TRANSIT_TO_FINISHING" if target_norm == "FINISHING_STATION"
+                else f"IN_TRANSIT_TO_{target_norm}"
+            )
+            lot_type_val = (
+                "DAGING" if cat == "DAGING"
+                else "BUMBU" if cat == "BUMBU"
+                else "KULIT" if cat == "KULIT"
+                else "SAOS" if cat == "SAOS"
+                else "KEMASAN" if cat == "KEMASAN"
+                else cat
+            )
+
+            # Cek apakah lot sudah ada
+            stmt_exist = select(LotTracking).where(LotTracking.lot_qr_code == lot_code)
+            res_exist = await db.execute(stmt_exist)
+            existing_lot = res_exist.scalar_one_or_none()
+            if existing_lot:
+                existing_lot.current_status = transit_status
+                existing_lot.current_station = "INBOUND"
+                existing_lot.quantity = payload.quantity
+                existing_lot.unit = payload.unit.upper()
+            else:
+                new_lot = LotTracking(
+                    lot_qr_code=lot_code,
+                    batch_no=1,
+                    lot_type=lot_type_val,
+                    current_status=transit_status,
+                    current_station="INBOUND",
+                    quantity=payload.quantity,
+                    unit=payload.unit.upper(),
+                    created_at=datetime.utcnow()
+                )
+                db.add(new_lot)
+
+            # Catat serah terima logistik di custody transfer logs
+            custody = CustodyTransferLog(
+                lot_qr_code=lot_code,
+                action_type="SCAN_OUT",
+                station_id="INBOUND",
+                target_station=target_norm,
+                user_id=payload.dispatched_by or current_user.get("operator_id") or "PPIC-AYU",
+                user_role_active="PPIC",
+                notes=f"Pengeluaran bahan baku {payload.item_name} ({payload.quantity} {payload.unit}) ke {payload.target_station_name or target_norm}",
+                timestamp=datetime.utcnow()
+            )
+            db.add(custody)
+
         await db.commit()
         await db.refresh(outbound)
         return outbound
@@ -3392,6 +3451,86 @@ async def get_ppic_export_report(
     return result_payload
 
 
+async def get_bumbu_usage_summary(db: AsyncSession, d_start: date, d_end: date) -> Dict[str, Any]:
+    """Mengagregasikan pemakaian bumbu di ruang Giling & Mix dalam satuan KRESEK."""
+    import re
+    # 1. Query tabel material_usages
+    stmt = select(MaterialUsage).where(
+        MaterialUsage.material_type == "BUMBU",
+        MaterialUsage.usage_date.between(d_start, d_end)
+    ).order_by(MaterialUsage.usage_date.asc(), MaterialUsage.created_at.asc())
+    res = await db.execute(stmt)
+    usages = res.scalars().all()
+
+    records = []
+    for u in usages:
+        records.append({
+            "id": u.id,
+            "date": u.usage_date.isoformat(),
+            "lot_qr_code": u.lot_qr_code,
+            "initial_quantity": float(u.initial_quantity),
+            "quantity_used": float(u.quantity_used),
+            "remaining_quantity": float(u.remaining_quantity),
+            "unit": "KRESEK",
+            "remaining_action": "Di Ruangan" if u.remaining_action == "STORE_IN_ROOM" else "Diretur",
+            "notes": u.notes or "-",
+            "operator_id": u.operator_id or "-"
+        })
+
+    # 2. Fallback jika tabel material_usages kosong untuk rentang tanggal ini
+    if not records:
+        dt_start = datetime.combine(d_start, datetime.min.time())
+        dt_end = datetime.combine(d_end, datetime.max.time())
+        c_stmt = select(CustodyTransferLog).where(
+            CustodyTransferLog.lot_qr_code.like("%BM-%"),
+            CustodyTransferLog.action_type.in_(["MATERIAL_STORED_IN_ROOM", "MATERIAL_CONSUMED", "MATERIAL_RETURNED"]),
+            CustodyTransferLog.timestamp.between(dt_start, dt_end)
+        ).order_by(CustodyTransferLog.timestamp.asc())
+        c_res = await db.execute(c_stmt)
+        c_logs = c_res.scalars().all()
+
+        for l in c_logs:
+            used_val = 0.0
+            sisa_val = 0.0
+            m_used = re.search(r"Digunakan:\s*([\d\.]+)", l.notes or "")
+            m_sisa = re.search(r"Sisa:\s*([\d\.]+)", l.notes or "")
+            if m_used:
+                used_val = float(m_used.group(1))
+            if m_sisa:
+                sisa_val = float(m_sisa.group(1))
+            elif "habis" in (l.notes or "").lower():
+                sisa_val = 0.0
+            
+            init_val = used_val + sisa_val
+            records.append({
+                "id": l.log_id,
+                "date": l.timestamp.date().isoformat() if l.timestamp else d_start.isoformat(),
+                "lot_qr_code": l.lot_qr_code,
+                "initial_quantity": init_val if init_val > 0 else 20.0,
+                "quantity_used": used_val if used_val > 0 else 1.0,
+                "remaining_quantity": sisa_val,
+                "unit": "KRESEK",
+                "remaining_action": "Di Ruangan" if l.action_type == "MATERIAL_STORED_IN_ROOM" else "Diretur",
+                "notes": l.notes or "-",
+                "operator_id": l.user_id or "-"
+            })
+
+    total_init = sum(r["initial_quantity"] for r in records)
+    total_used = sum(r["quantity_used"] for r in records)
+    latest_rem_map = {}
+    for r in records:
+        latest_rem_map[r["lot_qr_code"]] = r["remaining_quantity"]
+    total_rem = sum(latest_rem_map.values())
+
+    return {
+        "total_initial": total_init,
+        "total_used": total_used,
+        "total_remaining": total_rem,
+        "unit": "KRESEK",
+        "records": records
+    }
+
+
 @router.get("/daily-recap")
 async def get_daily_recap(
     recap_date: Optional[str] = None,
@@ -3758,6 +3897,7 @@ async def get_daily_recap(
 
         date_display = d_start.isoformat() if d_start == d_end else f"{d_start.isoformat()} s/d {d_end.isoformat()}"
         plan_id_str = plans[0].plan_id if len(plans) == 1 else f"PLAN-{d_start.strftime('%Y%m%d')}-RANGE"
+        bumbu_usage_range = await get_bumbu_usage_summary(db, d_start, d_end)
 
         return {
             "is_range": True,
@@ -3772,6 +3912,7 @@ async def get_daily_recap(
             "total_void": total_void_count,
             "total_pending": total_pending_count,
             "divisions": divisions_dict,
+            "bumbu_usage": bumbu_usage_range,
             "supplier_inbound": inbound_serialized,
             "inbound": inbound_serialized,
             "lots": lots_serialized
@@ -4049,6 +4190,8 @@ async def get_daily_recap(
         for l in all_today_lots
     ]
 
+    bumbu_usage_single = await get_bumbu_usage_summary(db, target_date, target_date)
+
     return {
         "is_range": False,
         "date": target_date.isoformat(),
@@ -4062,6 +4205,7 @@ async def get_daily_recap(
         "total_void": total_void_single,
         "total_pending": total_pending_single,
         "divisions": divisions_single_dict,
+        "bumbu_usage": bumbu_usage_single,
         "supplier_inbound": inbound_single_serialized,
         "inbound": inbound_single_serialized,
         "lots": lots_single_serialized

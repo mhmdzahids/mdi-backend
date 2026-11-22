@@ -12,7 +12,7 @@ def today_wib() -> str:
 
 from ..database import get_db
 from ..auth import require_division, get_current_user
-from ..models import LotTracking, CustodyTransferLog, DiscrepancyLog
+from ..models import LotTracking, CustodyTransferLog, DiscrepancyLog, MaterialUsage
 from ..schemas import (
     LotResponse,
     ReceiveMaterialRequest,
@@ -1191,20 +1191,41 @@ async def record_material_usage(
     action_rem = payload.remaining_action.upper().strip()
 
     try:
+        mat_type = "BUMBU" if ("BUMBU" in (lot.lot_type or "").upper() or "BM-" in clean_code) else "KULIT"
+        unit_val = "KRESEK" if mat_type == "BUMBU" else (lot.unit or "BAL")
+
         if sisa <= 0 or used >= sent:
             lot.current_status = "CONSUMED"
             lot.quantity = 0.0
+            lot.unit = unit_val
             log_action = "MATERIAL_CONSUMED"
-            log_notes = f"Bahan habis terpakai (Digunakan: {used} {lot.unit or 'UNIT'}). {payload.notes or ''}".strip()
+            log_notes = f"Bahan habis terpakai (Digunakan: {used} {unit_val}). {payload.notes or ''}".strip()
         else:
             lot.quantity = sisa
+            lot.unit = unit_val
             if action_rem == "RETURN_TO_FRONTDESK":
                 lot.current_status = "IN_TRANSIT_TO_FRONTDESK"
                 log_action = "MATERIAL_RETURNED"
-                log_notes = f"Digunakan: {used} {lot.unit}, Sisa: {sisa} {lot.unit} diretur ke Frontdesk. {payload.notes or ''}".strip()
+                log_notes = f"Digunakan: {used} {unit_val}, Sisa: {sisa} {unit_val} diretur ke Frontdesk. {payload.notes or ''}".strip()
             else:
                 log_action = "MATERIAL_STORED_IN_ROOM"
-                log_notes = f"Digunakan: {used} {lot.unit}, Sisa: {sisa} {lot.unit} disimpan di meja. {payload.notes or ''}".strip()
+                log_notes = f"Digunakan: {used} {unit_val}, Sisa: {sisa} {unit_val} disimpan di meja. {payload.notes or ''}".strip()
+
+        usage_rec = MaterialUsage(
+            lot_qr_code=lot.lot_qr_code,
+            material_type=mat_type,
+            station_id=lot.current_station or "MEAT_STATION",
+            usage_date=datetime.utcnow().date(),
+            initial_quantity=sent,
+            quantity_used=used,
+            remaining_quantity=sisa,
+            unit=unit_val,
+            remaining_action=action_rem,
+            notes=payload.notes or None,
+            operator_id=payload.operator_id or (current_user.get("operator_id") if isinstance(current_user, dict) else "OPR-DAGING"),
+            created_at=datetime.utcnow()
+        )
+        db.add(usage_rec)
 
         log = CustodyTransferLog(
             lot_qr_code=lot.lot_qr_code,

@@ -570,6 +570,16 @@ SYSTEM_ROLE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             "profile:view", "profile:change_password"
         ]
     },
+    "Produksi Kulit Pangsit": {
+        "description": "Persiapan dan penyerahan bal kulit pangsit 7cm & 9cm untuk meja cetak.",
+        "is_system": True,
+        "permissions": [
+            "wrapper:view", "wrapper:operate", "wrapper:scan",
+            "scan:operate",
+            "logs:view",
+            "profile:view", "profile:change_password"
+        ]
+    },
     "Produksi Kulit Dimsum": {
         "description": "Persiapan dan penyerahan bal kulit pangsit 7cm & 9cm untuk meja cetak.",
         "is_system": True,
