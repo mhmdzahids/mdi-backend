@@ -1149,7 +1149,35 @@ async def list_lots(
         query = query.where(LotTracking.current_status == status)
 
     result = await db.execute(query)
-    return result.scalars().all()
+    lots = result.scalars().all()
+
+    # Muat nama item untuk lot kiriman logistik supplier (OUT-*)
+    out_codes = [l.lot_qr_code for l in lots if l.lot_qr_code and l.lot_qr_code.startswith("OUT-")]
+    name_map = {}
+    if out_codes:
+        out_stmt = select(SupplierOutbound.lot_qr_code, SupplierOutbound.item_name).where(
+            SupplierOutbound.lot_qr_code.in_(out_codes)
+        )
+        out_res = await db.execute(out_stmt)
+        for code_val, name_val in out_res.all():
+            if code_val and name_val:
+                name_map[code_val] = name_val
+
+    resp = []
+    for l in lots:
+        resp.append(LotResponse(
+            lot_qr_code=l.lot_qr_code,
+            plan_id=l.plan_id,
+            lot_type=l.lot_type,
+            current_status=l.current_status,
+            current_station=l.current_station,
+            quantity=float(l.quantity or 0),
+            unit=l.unit,
+            created_at=l.created_at,
+            photo_evidence=l.photo_evidence,
+            item_name=name_map.get(l.lot_qr_code)
+        ))
+    return resp
 
 
 # Query Audit Trail

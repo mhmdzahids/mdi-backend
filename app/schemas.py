@@ -162,6 +162,7 @@ class LotResponse(BaseModel):
     unit: str
     created_at: datetime
     photo_evidence: Optional[str] = None
+    item_name: Optional[str] = None
 
     class Config:
         from_attributes = True
