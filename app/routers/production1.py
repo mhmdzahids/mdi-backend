@@ -3559,6 +3559,124 @@ async def get_bumbu_usage_summary(db: AsyncSession, d_start: date, d_end: date) 
     }
 
 
+async def get_all_material_usage_summary(db: AsyncSession, d_start: date, d_end: date) -> Dict[str, Any]:
+    """Mengagregasikan seluruh pemakaian bahan baku (Bumbu, Kulit, Daging) untuk laporan PPIC."""
+    dt_start = datetime.combine(d_start, datetime.min.time())
+    dt_end = datetime.combine(d_end, datetime.max.time())
+
+    stmt = select(MaterialUsage).where(
+        or_(
+            MaterialUsage.usage_date.between(d_start, d_end),
+            MaterialUsage.created_at.between(dt_start, dt_end)
+        )
+    ).order_by(MaterialUsage.usage_date.asc(), MaterialUsage.created_at.asc())
+    res = await db.execute(stmt)
+    usages = res.scalars().all()
+
+    # Map item_name via SupplierOutbound
+    lot_codes = [u.lot_qr_code for u in usages if u.lot_qr_code]
+    name_map = {}
+    if lot_codes:
+        out_stmt = select(SupplierOutbound.lot_qr_code, SupplierOutbound.item_name).where(
+            SupplierOutbound.lot_qr_code.in_(lot_codes)
+        )
+        out_res = await db.execute(out_stmt)
+        for c_val, n_val in out_res.all():
+            if c_val and n_val:
+                name_map[c_val] = n_val
+
+    records = []
+    by_division = {
+        "BUMBU": [],
+        "KULIT": [],
+        "DAGING": []
+    }
+
+    for u in usages:
+        code = u.lot_qr_code or ""
+        resolved_name = name_map.get(code)
+        if not resolved_name:
+            if code.startswith("BM-"):
+                resolved_name = "Karung Bumbu Sparta"
+            elif code.startswith("KL-"):
+                resolved_name = "Bal Kulit Pangsit"
+            elif code.startswith("DG-") or code.startswith("AD-"):
+                resolved_name = "Adonan Daging"
+            elif code.startswith("OUT-BM-"):
+                resolved_name = "Bahan Bumbu"
+            elif code.startswith("OUT-KL-"):
+                resolved_name = "Bahan Kulit"
+            elif code.startswith("OUT-DG-"):
+                resolved_name = "Bahan Daging"
+            else:
+                resolved_name = u.material_type or "Bahan Baku"
+
+        # Tentukan divisi
+        m_type = (u.material_type or "").upper()
+        s_id = (u.station_id or "").upper()
+        if "SEASONING" in s_id or "BUMBU" in s_id or (m_type == "BUMBU" and "OUT-BM" in code):
+            div_key = "BUMBU"
+            div_label = "Bumbu Sparta"
+        elif "WRAPPER" in s_id or "KULIT" in s_id or m_type == "KULIT" or "OUT-KL" in code:
+            div_key = "KULIT"
+            div_label = "Kulit Pangsit"
+        elif "MEAT" in s_id or "MIXING" in s_id or m_type == "DAGING" or "OUT-DG" in code or code.startswith("BM-"):
+            div_key = "DAGING"
+            div_label = "Daging (Giling & Mix)"
+        else:
+            div_key = m_type if m_type in by_division else "DAGING"
+            div_label = div_key
+
+        rec = {
+            "id": u.id,
+            "date": u.usage_date.isoformat() if u.usage_date else d_start.isoformat(),
+            "lot_qr_code": code,
+            "item_name": resolved_name,
+            "material_type": u.material_type,
+            "station_id": u.station_id,
+            "division": div_key,
+            "division_label": div_label,
+            "initial_quantity": float(u.initial_quantity or 0),
+            "quantity_used": float(u.quantity_used or 0),
+            "remaining_quantity": float(u.remaining_quantity or 0),
+            "unit": (u.unit or "KG").upper(),
+            "remaining_action": "Di Ruangan" if u.remaining_action == "STORE_IN_ROOM" else "Diretur" if u.remaining_action == "RETURN_TO_FRONTDESK" else (u.remaining_action or "Di Ruangan"),
+            "notes": u.notes or "-",
+            "operator_id": u.operator_id or "-"
+        }
+        records.append(rec)
+        if div_key in by_division:
+            by_division[div_key].append(rec)
+
+    # Aggregated summary by item_name + unit
+    summary_by_item = {}
+    for r in records:
+        k = f"{r['item_name']}___{r['unit']}"
+        if k not in summary_by_item:
+            summary_by_item[k] = {
+                "item_name": r["item_name"],
+                "unit": r["unit"],
+                "division": r["division"],
+                "division_label": r["division_label"],
+                "total_initial": 0.0,
+                "total_used": 0.0,
+                "total_remaining": 0.0,
+                "records_count": 0
+            }
+        summary_by_item[k]["total_initial"] += r["initial_quantity"]
+        summary_by_item[k]["total_used"] += r["quantity_used"]
+        summary_by_item[k]["total_remaining"] += r["remaining_quantity"]
+        summary_by_item[k]["records_count"] += 1
+
+    return {
+        "total_records": len(records),
+        "records": records,
+        "by_division": by_division,
+        "summary_by_item": list(summary_by_item.values())
+    }
+
+
+
 @router.get("/daily-recap")
 async def get_daily_recap(
     recap_date: Optional[str] = None,
@@ -3926,6 +4044,11 @@ async def get_daily_recap(
         date_display = d_start.isoformat() if d_start == d_end else f"{d_start.isoformat()} s/d {d_end.isoformat()}"
         plan_id_str = plans[0].plan_id if len(plans) == 1 else f"PLAN-{d_start.strftime('%Y%m%d')}-RANGE"
         bumbu_usage_range = await get_bumbu_usage_summary(db, d_start, d_end)
+        raw_material_usage_range = await get_all_material_usage_summary(db, d_start, d_end)
+
+        for div_k in ["BUMBU", "KULIT", "DAGING"]:
+            if div_k in divisions_dict:
+                divisions_dict[div_k]["raw_materials"] = raw_material_usage_range["by_division"].get(div_k, [])
 
         return {
             "is_range": True,
@@ -3941,6 +4064,7 @@ async def get_daily_recap(
             "total_pending": total_pending_count,
             "divisions": divisions_dict,
             "bumbu_usage": bumbu_usage_range,
+            "raw_material_usage": raw_material_usage_range,
             "supplier_inbound": inbound_serialized,
             "inbound": inbound_serialized,
             "lots": lots_serialized
@@ -4219,6 +4343,11 @@ async def get_daily_recap(
     ]
 
     bumbu_usage_single = await get_bumbu_usage_summary(db, target_date, target_date)
+    raw_material_usage_single = await get_all_material_usage_summary(db, target_date, target_date)
+
+    for div_k in ["BUMBU", "KULIT", "DAGING"]:
+        if div_k in divisions_single_dict:
+            divisions_single_dict[div_k]["raw_materials"] = raw_material_usage_single["by_division"].get(div_k, [])
 
     return {
         "is_range": False,
@@ -4234,6 +4363,7 @@ async def get_daily_recap(
         "total_pending": total_pending_single,
         "divisions": divisions_single_dict,
         "bumbu_usage": bumbu_usage_single,
+        "raw_material_usage": raw_material_usage_single,
         "supplier_inbound": inbound_single_serialized,
         "inbound": inbound_single_serialized,
         "lots": lots_single_serialized
