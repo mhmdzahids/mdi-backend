@@ -1192,13 +1192,23 @@ async def record_material_usage(
 
     try:
         is_out_lot = clean_code.startswith("OUT-")
-        mat_type = "BUMBU" if ("BUMBU" in (lot.lot_type or "").upper() or "BM-" in clean_code) else "KULIT"
+        if "BUMBU" in (lot.lot_type or "").upper() or "BM-" in clean_code:
+            mat_type = "BUMBU"
+        elif "KULIT" in (lot.lot_type or "").upper() or "KL-" in clean_code:
+            mat_type = "KULIT"
+        elif "DAGING" in (lot.lot_type or "").upper() or "DG-" in clean_code:
+            mat_type = "DAGING"
+        else:
+            mat_type = lot.lot_type or "BAHAN"
+
         if is_out_lot and lot.unit:
             unit_val = lot.unit.upper()
         elif lot.unit and lot.unit.upper() not in ["KARUNG", "BAL"]:
             unit_val = lot.unit.upper()
         elif mat_type == "BUMBU":
             unit_val = "KRESEK"
+        elif mat_type == "DAGING":
+            unit_val = "KG"
         else:
             unit_val = lot.unit or "BAL"
 
@@ -1222,13 +1232,24 @@ async def record_material_usage(
                 elif "WRAPPER" in (lot.current_station or "") or "WRAPPER" in (lot.current_status or ""):
                     lot.current_status = "READY_IN_WRAPPER_STATION"
                     lot.current_station = "WRAPPER_STATION"
+                elif "MEAT" in (lot.current_station or "") or "MEAT" in (lot.current_status or "") or "MIXING" in (lot.current_status or ""):
+                    lot.current_status = "IN_MEAT_MIXING_STATION"
+                    lot.current_station = "MEAT_STATION"
                 log_action = "MATERIAL_STORED_IN_ROOM"
                 log_notes = f"Digunakan: {used} {unit_val}, Sisa: {sisa} {unit_val} disimpan di ruangan. {payload.notes or ''}".strip()
+
+        target_station_id = (
+            lot.current_station or
+            ("SEASONING_STATION" if "SEASONING" in (lot.current_status or "")
+             else "WRAPPER_STATION" if "WRAPPER" in (lot.current_status or "")
+             else "MEAT_STATION" if ("MEAT" in (lot.current_status or "") or "MIXING" in (lot.current_status or ""))
+             else "ASSEMBLY_STATION")
+        )
 
         usage_rec = MaterialUsage(
             lot_qr_code=lot.lot_qr_code,
             material_type=mat_type,
-            station_id=lot.current_station or ("SEASONING_STATION" if "SEASONING" in (lot.current_status or "") else "WRAPPER_STATION" if "WRAPPER" in (lot.current_status or "") else "ASSEMBLY_STATION"),
+            station_id=target_station_id,
             usage_date=datetime.utcnow().date(),
             initial_quantity=sent,
             quantity_used=used,
@@ -1244,7 +1265,7 @@ async def record_material_usage(
         log = CustodyTransferLog(
             lot_qr_code=lot.lot_qr_code,
             action_type=log_action,
-            station_id=lot.current_station or ("SEASONING_STATION" if "SEASONING" in (lot.current_status or "") else "WRAPPER_STATION" if "WRAPPER" in (lot.current_status or "") else "ASSEMBLY_STATION"),
+            station_id=target_station_id,
             target_station="FRONTDESK" if action_rem == "RETURN_TO_FRONTDESK" and sisa > 0 else None,
             user_id=payload.operator_id,
             user_role_active=payload.operator_role,
